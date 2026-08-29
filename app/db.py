@@ -712,37 +712,14 @@ async def init_db():
 
         await conn.execute(SCHEMA)
 
-        # ----------------------------------------------------
         # Safe migrations for databases created by older builds
-        # ----------------------------------------------------
-        # CREATE TABLE IF NOT EXISTS does not add columns to an
-        # already existing PostgreSQL table. Keep old Render DBs
-        # compatible with the current application.
-        for table, column, definition in [
-            ("games", "description", "TEXT"),
-            ("games", "emoji", "TEXT"),
-            ("games", "enabled", "BOOLEAN NOT NULL DEFAULT TRUE"),
-            ("games", "min_bet", "BIGINT NOT NULL DEFAULT 10"),
-            ("games", "max_bet", "BIGINT NOT NULL DEFAULT 100000"),
-            ("users", "xp", "BIGINT NOT NULL DEFAULT 0"),
-            ("users", "level", "INTEGER NOT NULL DEFAULT 1"),
-            ("users", "games", "BIGINT NOT NULL DEFAULT 0"),
-            ("users", "wins", "BIGINT NOT NULL DEFAULT 0"),
-            ("users", "losses", "BIGINT NOT NULL DEFAULT 0"),
-            ("users", "referrals", "INTEGER NOT NULL DEFAULT 0"),
-            ("users", "referred_by", "BIGINT"),
-            ("users", "referral_rewarded", "BOOLEAN NOT NULL DEFAULT FALSE"),
-            ("users", "banned", "BOOLEAN NOT NULL DEFAULT FALSE"),
-            ("users", "admin", "BOOLEAN NOT NULL DEFAULT FALSE"),
-            ("users", "streak", "INTEGER NOT NULL DEFAULT 0"),
-            ("users", "daily_claimed_at", "TIMESTAMPTZ"),
-            ("users", "last_activity_at", "TIMESTAMPTZ"),
-            ("users", "created_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()"),
-            ("users", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()"),
-        ]:
-            await conn.execute(
-                f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}'
-            )
+        await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS description TEXT")
+        await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS emoji TEXT")
+        await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE")
+        await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS min_bet BIGINT NOT NULL DEFAULT 10")
+        await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS max_bet BIGINT NOT NULL DEFAULT 100000")
+        await conn.execute("ALTER TABLE game_history ADD COLUMN IF NOT EXISTS multiplier NUMERIC(12,4)")
+        await conn.execute("ALTER TABLE game_history ADD COLUMN IF NOT EXISTS result JSONB NOT NULL DEFAULT '{}'")
 
         # ----------------------------------------------------
         # Default games
@@ -1376,23 +1353,6 @@ async def result(
         user_id,
         1 if win else 0,
         0 if win else 1,
-    )
-
-
-# ============================================================
-# GAMES
-# ============================================================
-
-async def get_games():
-    db = check_pool()
-    return await db.fetch(
-        """
-        SELECT id, code, title, description, emoji, enabled,
-               min_bet, max_bet, created_at
-        FROM games
-        WHERE enabled = TRUE
-        ORDER BY id ASC
-        """
     )
 
 
@@ -2706,3 +2666,126 @@ async def get_stats():
         "pvp_matches": pvp,
         "referrals": referrals,
     }
+
+# ============================================================
+# GAMES API
+# ============================================================
+
+async def get_games():
+    db = check_pool()
+    return await db.fetch(
+        """
+        SELECT id, code, title, description, emoji, enabled, min_bet, max_bet, created_at
+        FROM games
+        WHERE enabled = TRUE
+        ORDER BY id ASC
+        """
+    )
+
+
+async def get_game(game_code):
+    db = check_pool()
+    return await db.fetchrow(
+        """
+        SELECT id, code, title, description, emoji, enabled, min_bet, max_bet, created_at
+        FROM games
+        WHERE code = $1
+        LIMIT 1
+        """,
+        str(game_code),
+    )
+
+
+async def play_game(user_id: int, game_code: str, bet: int, win: int, multiplier: Optional[float] = None, result_data: Optional[dict] = None):
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
+    if win < 0:
+        raise ValueError("Некорректный результат игры")
+
+    db = check_pool()
+    profit = int(win) - int(bet)
+
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            user = await conn.fetchrow(
+                "SELECT id, balance, banned FROM users WHERE id = $1 FOR UPDATE",
+                user_id,
+            )
+            if not user:
+                raise ValueError("Пользователь не найден")
+            if user["banned"]:
+                raise ValueError("Пользователь заблокирован")
+            before = int(user["balance"])
+            if before < int(bet):
+                raise ValueError("Недостаточно Fenix Coin")
+            after = before + profit
+
+            await conn.execute(
+                """
+                UPDATE users
+                SET balance = $2, games = games + 1,
+                    wins = wins + $3, losses = losses + $4,
+                    last_activity_at = NOW(), updated_at = NOW()
+                WHERE id = $1
+                """,
+                user_id, after, 1 if profit > 0 else 0, 1 if profit <= 0 else 0,
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO game_history (user_id, game_code, bet, win, profit, multiplier, result)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+                """,
+                user_id, str(game_code), int(bet), int(win), int(profit), multiplier,
+                json.dumps(result_data or {}, ensure_ascii=False),
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO transactions (user_id, amount, balance_before, balance_after, reason, meta)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                """,
+                user_id, int(profit), before, after, f"game:{game_code}",
+                json.dumps({"game": str(game_code), "bet": int(bet), "win": int(win), "multiplier": multiplier}, ensure_ascii=False),
+            )
+
+            return {
+                "win": profit > 0,
+                "bet": int(bet),
+                "win_amount": int(win),
+                "profit": int(profit),
+                "multiplier": multiplier,
+                "balance": int(after),
+                "game": str(game_code),
+            }
+
+
+
+# ============================================================
+# PLAYER STATS API
+# ============================================================
+
+async def get_player_stats(user_id: int):
+    db = check_pool()
+    row = await db.fetchrow(
+        """
+        SELECT
+            id, username, first_name, last_name, balance, xp, level,
+            games, wins, losses, referrals, streak, banned, admin,
+            created_at, last_activity_at
+        FROM users
+        WHERE id = $1
+        LIMIT 1
+        """,
+        user_id,
+    )
+
+    if not row:
+        return None
+
+    games = int(row["games"] or 0)
+    wins = int(row["wins"] or 0)
+
+    data = dict(row)
+    data["win_rate"] = round((wins / games) * 100, 2) if games else 0.0
+    return data
