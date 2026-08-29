@@ -2706,3 +2706,24 @@ async def get_stats():
         "pvp_matches": pvp,
         "referrals": referrals,
     }
+async def get_game(game_id):
+    db = check_pool()
+
+    return await db.fetchrow(
+        """
+        SELECT
+            id,
+            code,
+            title,
+            description,
+            emoji,
+            enabled,
+            min_bet,
+            max_bet,
+            created_at
+        FROM games
+        WHERE id = $1
+        LIMIT 1
+        """,
+        game_id,
+    )
