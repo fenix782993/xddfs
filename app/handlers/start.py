@@ -1,20 +1,85 @@
-from aiogram import Router,F
+from aiogram import Router, F
 from aiogram.filters import CommandStart
-from aiogram.types import Message,CallbackQuery
+from aiogram.types import Message, CallbackQuery
+
 from app.db import ensure_user
-from app.economy import referral
-from app.keyboards import main
-from app.ui import visual
-r=Router()
+from app.keyboards import main_menu
+from app.config import settings
+
+
+r = Router()
+
+
 @r.message(CommandStart())
-async def start(m:Message):
-    a=m.text.split(maxsplit=1)[1] if len(m.text.split())>1 else ""
-    ref=int(a[3:]) if a.startswith("ref") and a[3:].isdigit() else None
-    _,created=await ensure_user(m.from_user,ref)
-    if created: await referral(m.from_user.id)
-    await m.answer_photo(visual("FENIX COIN","🔥 Игровая платформа\\n🎮 Games • ⚔️ PvP • 🤖 PvE\\n💰 Fenix Coin • 🎯 Missions • 👥 Referrals","🔥"),
-                          caption="<b>FENIX COIN</b>",reply_markup=main())
-@r.callback_query(F.data=="home")
-async def home(c:CallbackQuery):
-    await c.answer();await c.message.delete()
-    await c.message.answer_photo(visual("FENIX COIN","Главное меню.","🔥"),reply_markup=main())
+async def start(message: Message):
+
+    ref = None
+
+    args = message.text.split(maxsplit=1)
+
+    if len(args) == 2:
+
+        value = args[1]
+
+        if value.startswith("ref_"):
+
+            raw = value.replace(
+                "ref_",
+                "",
+                1,
+            )
+
+            if raw.isdigit():
+                ref = int(raw)
+
+    user, created = await ensure_user(
+        message.from_user,
+        ref,
+    )
+
+    if created and ref:
+
+        if ref != message.from_user.id:
+
+            try:
+                await message.bot.send_message(
+                    ref,
+                    (
+                        "🔥 <b>Новый реферал!</b>\n\n"
+                        f"Ты получил <b>{settings.ref_reward} 🔥</b> "
+                        "Fenix Coin."
+                    ),
+                )
+            except Exception:
+                pass
+
+    await message.answer(
+        (
+            "🔥 <b>FENIX COIN</b>\n\n"
+            "Добро пожаловать в игровую систему.\n\n"
+            f"💰 Баланс: <b>{user['balance']} 🔥</b>\n"
+            f"⭐ Уровень: <b>{user['level']}</b>\n\n"
+            "Выбирай раздел:"
+        ),
+        reply_markup=main_menu(),
+    )
+
+
+@r.callback_query(F.data == "home")
+async def home(callback: CallbackQuery):
+
+    user, _ = await ensure_user(
+        callback.from_user
+    )
+
+    await callback.message.edit_text(
+        (
+            "🔥 <b>FENIX COIN</b>\n\n"
+            f"💰 Баланс: <b>{user['balance']} 🔥</b>\n"
+            f"⭐ Уровень: <b>{user['level']}</b>\n\n"
+            "Главное меню:"
+        ),
+        reply_markup=main_menu(),
+    )
+
+    await callback.answer()

@@ -1,302 +1,523 @@
-import asyncio
+import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Header,
+)
+
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.db import init_db, close_db, pool, get_user
+from app.db import (
+    init_db,
+    close_db,
+    get_user,
+    leaderboard,
+    get_active_missions,
+    get_game_history,
+    get_transactions,
+    get_referrals,
+    get_shop,
+    get_inventory,
+    get_stats,
+)
 
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-WEB_DIR = BASE_DIR / "web"
-STATIC_DIR = WEB_DIR / "static"
-
-
-# =========================================================
-# TELEGRAM BOT
-# =========================================================
-
-async def run_telegram_bot():
-    from aiogram import Bot, Dispatcher
-
-    from app.handlers import (
-        start,
-        menu,
-        games,
-        missions,
-        admin,
-        pvp,
-    )
-
-    if not settings.bot_token:
-        print("WARNING: BOT_TOKEN is not configured.")
-        return
-
-    bot = Bot(token=settings.bot_token)
-
-    dp = Dispatcher()
-
-    dp.include_router(start.r)
-    dp.include_router(menu.r)
-    dp.include_router(games.r)
-    dp.include_router(missions.r)
-    dp.include_router(admin.r)
-    dp.include_router(pvp.r)
-
-    print("======================================")
-    print("🔥 FENIX COIN TELEGRAM BOT STARTING")
-    print("======================================")
-
-    try:
-        await dp.start_polling(
-            bot,
-            allowed_updates=dp.resolve_used_update_types(),
-        )
-    finally:
-        await bot.session.close()
-
-
-# =========================================================
-# FASTAPI LIFESPAN
-# =========================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    print("======================================")
-    print("🔥 FENIX COIN ULTRA STARTING")
-    print("======================================")
-
-    # PostgreSQL
     await init_db()
 
-    print("✅ PostgreSQL connected")
+    yield
 
-    # Telegram bot
-    bot_task = asyncio.create_task(
-        run_telegram_bot()
-    )
+    await close_db()
 
-    app.state.bot_task = bot_task
-
-    print("✅ Telegram bot task started")
-    print("✅ Mini App started")
-    print("======================================")
-
-    try:
-        yield
-
-    finally:
-
-        print("Stopping Fenix Coin...")
-
-        bot_task.cancel()
-
-        try:
-            await bot_task
-        except asyncio.CancelledError:
-            pass
-
-        await close_db()
-
-
-# =========================================================
-# FASTAPI
-# =========================================================
 
 app = FastAPI(
     title="Fenix Coin Ultra",
-    version="ULTRA FULL",
+    version="ULTRA",
     lifespan=lifespan,
 )
 
 
-# =========================================================
-# STATIC
-# =========================================================
-
-if STATIC_DIR.exists():
-
-    app.mount(
-        "/static",
-        StaticFiles(
-            directory=str(STATIC_DIR)
-        ),
-        name="static",
-    )
-
-
-# =========================================================
-# HOME / MINI APP
-# =========================================================
-
-@app.get(
-    "/",
-    include_in_schema=False,
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-async def home():
 
-    index = WEB_DIR / "index.html"
 
-    if index.exists():
+# ============================================================
+# HEALTH
+# ============================================================
 
-        return FileResponse(
-            str(index),
-            media_type="text/html",
-        )
+@app.get("/")
+async def root():
 
     return {
         "ok": True,
         "service": "Fenix Coin Ultra",
-        "version": "ULTRA FULL",
+        "version": "ULTRA",
+        "status": "online",
     }
 
-
-# =========================================================
-# HEALTH
-# =========================================================
 
 @app.get("/health")
 async def health():
 
     return {
-        "status": "healthy",
-        "service": "fenix-coin-ultra",
-        "version": "ultra-full",
+        "ok": True,
+        "database": "connected",
+        "service": "Fenix Coin Ultra",
     }
 
 
-# =========================================================
-# PROFILE
-# =========================================================
+# ============================================================
+# USER
+# ============================================================
 
-@app.get("/api/profile/{uid}")
-async def profile(uid: int):
+@app.get("/api/user/{user_id}")
+async def api_user(
+    user_id: int,
+):
 
-    user = await get_user(uid)
+    user = await get_user(user_id)
 
     if not user:
-
         raise HTTPException(
-            status_code=404,
-            detail="user_not_found",
+            404,
+            "User not found"
         )
 
-    return dict(user)
+    return {
+        "id": user["id"],
+        "username": user["username"],
+        "first_name": user["first_name"],
+        "last_name": user["last_name"],
+
+        "balance": user["balance"],
+
+        "xp": user["xp"],
+        "level": user["level"],
+
+        "games": user["games"],
+        "wins": user["wins"],
+        "losses": user["losses"],
+
+        "referrals": user["referrals"],
+        "streak": user["streak"],
+
+        "banned": user["banned"],
+    }
 
 
-# =========================================================
-# GAMES
-# =========================================================
+# ============================================================
+# PROFILE
+# ============================================================
 
-@app.get("/api/games")
-async def games_api():
+@app.get("/api/profile/{user_id}")
+async def profile(
+    user_id: int,
+):
 
-    rows = await pool.fetch(
-        """
-        SELECT
-            id,
-            code,
-            title,
-            enabled,
-            min_bet,
-            max_bet
-        FROM games
-        WHERE enabled = TRUE
-        ORDER BY id
-        """
-    )
+    user = await get_user(user_id)
 
-    return [
-        dict(row)
-        for row in rows
-    ]
+    if not user:
+        raise HTTPException(
+            404,
+            "User not found"
+        )
 
-
-# =========================================================
-# MISSIONS
-# =========================================================
-
-@app.get("/api/missions")
-async def missions_api():
-
-    rows = await pool.fetch(
-        """
-        SELECT
-            id,
-            title,
-            reward,
-            kind,
-            target,
-            active
-        FROM missions
-        WHERE active = TRUE
-        ORDER BY id DESC
-        """
-    )
-
-    return [
-        dict(row)
-        for row in rows
-    ]
-
-
-# =========================================================
-# LEADERBOARD
-# =========================================================
-
-@app.get("/api/leaderboard")
-async def leaderboard():
-
-    rows = await pool.fetch(
-        """
-        SELECT
-            id,
-            username,
-            first_name,
-            balance,
-            xp,
-            level,
-            wins,
-            losses,
-            games
-        FROM users
-        WHERE banned = FALSE
-        ORDER BY balance DESC
-        LIMIT 50
-        """
-    )
-
-    return [
-        dict(row)
-        for row in rows
-    ]
-
-
-# =========================================================
-# STATS
-# =========================================================
-
-@app.get("/api/stats")
-async def stats():
-
-    users = await pool.fetchval(
-        "SELECT COUNT(*) FROM users"
-    )
-
-    games = await pool.fetchval(
-        "SELECT COALESCE(SUM(games), 0) FROM users"
-    )
-
-    coins = await pool.fetchval(
-        "SELECT COALESCE(SUM(balance), 0) FROM users"
+    history = await get_game_history(
+        user_id,
+        10
     )
 
     return {
-        "users": users,
-        "games": games,
-        "coins": coins,
+        "user": {
+            "id": user["id"],
+            "username": user["username"],
+            "first_name": user["first_name"],
+            "balance": user["balance"],
+            "xp": user["xp"],
+            "level": user["level"],
+            "games": user["games"],
+            "wins": user["wins"],
+            "losses": user["losses"],
+            "referrals": user["referrals"],
+            "streak": user["streak"],
+        },
+
+        "history": [
+            {
+                "id": x["id"],
+                "game": x["game_code"],
+                "bet": x["bet"],
+                "win": x["win"],
+                "profit": x["profit"],
+                "multiplier": (
+                    float(x["multiplier"])
+                    if x["multiplier"] is not None
+                    else None
+                ),
+                "created_at": x["created_at"],
+            }
+
+            for x in history
+        ]
+    }
+
+
+# ============================================================
+# ECONOMY
+# ============================================================
+
+@app.get("/api/economy/{user_id}")
+async def economy(
+    user_id: int,
+):
+
+    user = await get_user(user_id)
+
+    if not user:
+        raise HTTPException(
+            404,
+            "User not found"
+        )
+
+    transactions = await get_transactions(
+        user_id,
+        30
+    )
+
+    return {
+        "balance": user["balance"],
+
+        "transactions": [
+            {
+                "id": x["id"],
+                "amount": x["amount"],
+                "before": x["balance_before"],
+                "after": x["balance_after"],
+                "reason": x["reason"],
+                "meta": x["meta"],
+                "created_at": x["created_at"],
+            }
+
+            for x in transactions
+        ]
+    }
+
+
+# ============================================================
+# GAMES
+# ============================================================
+
+@app.get("/api/games")
+async def games():
+
+    return {
+        "games": [
+
+            {
+                "code": "dice",
+                "title": "🎲 Dice",
+                "type": "telegram",
+                "pvp": True,
+            },
+
+            {
+                "code": "slots",
+                "title": "🎰 Slots",
+                "type": "casino",
+                "pvp": False,
+            },
+
+            {
+                "code": "mines",
+                "title": "💣 Mines",
+                "type": "strategy",
+                "pvp": False,
+            },
+
+            {
+                "code": "crash",
+                "title": "📈 Crash",
+                "type": "arcade",
+                "pvp": False,
+            },
+
+            {
+                "code": "roulette",
+                "title": "🎡 Roulette",
+                "type": "casino",
+                "pvp": True,
+            },
+
+            {
+                "code": "football",
+                "title": "⚽ Football",
+                "type": "telegram",
+                "pvp": True,
+            },
+
+            {
+                "code": "basketball",
+                "title": "🏀 Basketball",
+                "type": "telegram",
+                "pvp": True,
+            },
+
+            {
+                "code": "darts",
+                "title": "🎯 Darts",
+                "type": "telegram",
+                "pvp": True,
+            },
+
+            {
+                "code": "bowling",
+                "title": "🎳 Bowling",
+                "type": "telegram",
+                "pvp": True,
+            },
+        ]
+    }
+
+
+# ============================================================
+# MISSIONS
+# ============================================================
+
+@app.get("/api/missions")
+async def missions():
+
+    rows = await get_active_missions()
+
+    return {
+        "missions": [
+
+            {
+                "id": x["id"],
+                "title": x["title"],
+                "description": x["description"],
+                "kind": x["kind"],
+                "target": x["target"],
+                "target_value": x["target_value"],
+                "reward": x["reward"],
+            }
+
+            for x in rows
+        ]
+    }
+
+
+# ============================================================
+# REFERRALS
+# ============================================================
+
+@app.get("/api/referrals/{user_id}")
+async def referrals(
+    user_id: int,
+):
+
+    user = await get_user(user_id)
+
+    if not user:
+        raise HTTPException(
+            404,
+            "User not found"
+        )
+
+    rows = await get_referrals(
+        user_id
+    )
+
+    username = (
+        settings.bot_username
+        or "FenixCoinBot"
+    )
+
+    link = (
+        f"https://t.me/{username}"
+        f"?start=ref_{user_id}"
+    )
+
+    return {
+        "reward": settings.ref_reward,
+
+        "count": len(rows),
+
+        "link": link,
+
+        "referrals": [
+            {
+                "id": x["referred_id"],
+                "username": x["username"],
+                "first_name": x["first_name"],
+                "reward": x["reward"],
+                "created_at": x["created_at"],
+            }
+
+            for x in rows
+        ]
+    }
+
+
+# ============================================================
+# SHOP
+# ============================================================
+
+@app.get("/api/shop")
+async def shop():
+
+    rows = await get_shop()
+
+    return {
+        "items": [
+
+            {
+                "id": x["id"],
+                "code": x["code"],
+                "title": x["title"],
+                "description": x["description"],
+                "price": x["price"],
+                "kind": x["kind"],
+                "data": x["data"],
+            }
+
+            for x in rows
+        ]
+    }
+
+
+# ============================================================
+# INVENTORY
+# ============================================================
+
+@app.get("/api/inventory/{user_id}")
+async def inventory(
+    user_id: int,
+):
+
+    rows = await get_inventory(
+        user_id
+    )
+
+    return {
+        "items": [
+
+            {
+                "item_id": x["item_id"],
+                "code": x["code"],
+                "title": x["title"],
+                "description": x["description"],
+                "kind": x["kind"],
+                "quantity": x["quantity"],
+                "data": x["data"],
+            }
+
+            for x in rows
+        ]
+    }
+
+
+# ============================================================
+# LEADERBOARD
+# ============================================================
+
+@app.get("/api/leaderboard")
+async def api_leaderboard():
+
+    rows = await leaderboard(
+        100
+    )
+
+    return {
+        "players": [
+
+            {
+                "place": index + 1,
+                "id": x["id"],
+                "username": x["username"],
+                "first_name": x["first_name"],
+                "balance": x["balance"],
+                "level": x["level"],
+                "xp": x["xp"],
+                "games": x["games"],
+                "wins": x["wins"],
+                "losses": x["losses"],
+                "referrals": x["referrals"],
+            }
+
+            for index, x in enumerate(rows)
+        ]
+    }
+
+
+# ============================================================
+# ADMIN STATISTICS
+# ============================================================
+
+@app.get("/api/admin/stats")
+async def admin_stats(
+    x_admin_id: int | None = Header(
+        default=None
+    ),
+):
+
+    if x_admin_id not in settings.admins:
+
+        raise HTTPException(
+            403,
+            "Admin access required"
+        )
+
+    return await get_stats()
+
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+@app.get("/api/config")
+async def config():
+
+    return {
+        "name": "Fenix Coin",
+        "version": "ULTRA",
+
+        "currency": {
+            "name": "Fenix Coin",
+            "symbol": "🔥",
+        },
+
+        "economy": {
+            "start_balance":
+                settings.start_balance,
+
+            "ref_reward":
+                settings.ref_reward,
+
+            "min_bet":
+                settings.min_bet,
+
+            "max_bet":
+                settings.max_bet,
+        },
+
+        "features": {
+            "pvp": True,
+            "pve": True,
+            "missions": True,
+            "referrals": True,
+            "shop": True,
+            "inventory": True,
+            "leaderboard": True,
+            "admin": True,
+        }
     }

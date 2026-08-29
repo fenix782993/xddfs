@@ -1,39 +1,199 @@
-from aiogram import Router,F
-from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery
+
 from app.config import settings
-from app.db import pool,balance
-r=Router()
-def admin(uid): return uid in settings.admin_ids
-@r.message(Command("admin"))
-async def panel(m):
-    if not admin(m.from_user.id): return
-    s=await pool.fetchrow("SELECT COUNT(*) users,COALESCE(SUM(balance),0) coins,COALESCE(SUM(games),0) games FROM users")
-    await m.answer(f"🛡️ FENIX ADMIN\\n\\n👥 {s['users']} users\\n🔥 {s['coins']} coins\\n🎮 {s['games']} games\\n\\n/give ID AMOUNT\\n/take ID AMOUNT\\n/ban ID\\n/mission TITLE | REWARD | KIND | TARGET")
-@r.message(Command("give"))
-async def give(m):
-    if not admin(m.from_user.id): return
-    p=m.text.split()
-    if len(p)==3:
-        try: await balance(int(p[1]),int(p[2]),"admin_give");await m.answer("✅ Выдано")
-        except Exception as e: await m.answer("❌ "+str(e))
-@r.message(Command("take"))
-async def take(m):
-    if not admin(m.from_user.id): return
-    p=m.text.split()
-    if len(p)==3:
-        try: await balance(int(p[1]),-int(p[2]),"admin_take");await m.answer("✅ Списано")
-        except Exception as e: await m.answer("❌ "+str(e))
-@r.message(Command("ban"))
-async def ban(m):
-    if admin(m.from_user.id) and len(m.text.split())==2:
-        await pool.execute("UPDATE users SET banned=TRUE WHERE id=$1",int(m.text.split()[1]));await m.answer("🚫 Banned")
-@r.message(F.chat.type=="channel")
-async def channel(m):
-    if m.text and m.text.startswith("/mission add") and (settings.admin_channel_id is None or m.chat.id==settings.admin_channel_id):
-        p=[x.strip() for x in m.text.split("|")]
-        if len(p)>=5:
-            try:
-                row=await pool.fetchrow("INSERT INTO missions(title,reward,kind,target) VALUES($1,$2,$3,$4) RETURNING id",p[1],int(p[2]),p[3],p[4])
-                await m.reply(f"✅ Mission #{row['id']} created")
-            except Exception as e: await m.reply("❌ "+str(e))
+from app.db import pool, balance
+
+
+r = Router()
+
+
+def is_admin(user_id: int):
+
+    return settings.is_admin(
+        user_id
+    )
+
+
+@r.message(F.text == "/admin")
+async def admin(message: Message):
+
+    if not is_admin(
+        message.from_user.id
+    ):
+
+        await message.answer(
+            "⛔ Доступ запрещён."
+        )
+
+        return
+
+    users = await pool.fetchval(
+        "SELECT COUNT(*) FROM users"
+    )
+
+    coins = await pool.fetchval(
+        "SELECT COALESCE(SUM(balance), 0) FROM users"
+    )
+
+    await message.answer(
+        (
+            "🛡️ <b>FENIX ADMIN PANEL</b>\n\n"
+            f"👥 Пользователей: <b>{users}</b>\n"
+            f"🔥 В обороте: <b>{coins}</b>\n\n"
+            "<b>Команды:</b>\n\n"
+            "/stats\n"
+            "/give USER_ID AMOUNT\n"
+            "/take USER_ID AMOUNT\n"
+            "/ban USER_ID\n"
+            "/unban USER_ID\n"
+            "/mission TITLE REWARD\n"
+        )
+    )
+
+
+@r.message(F.text == "/stats")
+async def stats(message: Message):
+
+    if not is_admin(
+        message.from_user.id
+    ):
+        return
+
+    users = await pool.fetchval(
+        "SELECT COUNT(*) FROM users"
+    )
+
+    games = await pool.fetchval(
+        "SELECT COALESCE(SUM(games), 0) FROM users"
+    )
+
+    await message.answer(
+        (
+            "📊 <b>СТАТИСТИКА</b>\n\n"
+            f"👥 Users: {users}\n"
+            f"🎮 Games: {games}"
+        )
+    )
+
+
+@r.message(F.text.startswith("/give "))
+async def give(message: Message):
+
+    if not is_admin(
+        message.from_user.id
+    ):
+        return
+
+    parts = message.text.split()
+
+    if len(parts) != 3:
+        await message.answer(
+            "/give USER_ID AMOUNT"
+        )
+        return
+
+    uid = int(parts[1])
+    amount = int(parts[2])
+
+    new_balance = await balance(
+        uid,
+        amount,
+        "admin_give",
+    )
+
+    await message.answer(
+        f"✅ Баланс: <b>{new_balance} 🔥</b>"
+    )
+
+
+@r.message(F.text.startswith("/take "))
+async def take(message: Message):
+
+    if not is_admin(
+        message.from_user.id
+    ):
+        return
+
+    parts = message.text.split()
+
+    if len(parts) != 3:
+        await message.answer(
+            "/take USER_ID AMOUNT"
+        )
+        return
+
+    uid = int(parts[1])
+    amount = int(parts[2])
+
+    try:
+
+        new_balance = await balance(
+            uid,
+            -amount,
+            "admin_take",
+        )
+
+    except ValueError:
+
+        await message.answer(
+            "❌ Недостаточно средств."
+        )
+
+        return
+
+    await message.answer(
+        f"✅ Баланс: <b>{new_balance} 🔥</b>"
+    )
+
+
+@r.message(F.text.startswith("/ban "))
+async def ban(message: Message):
+
+    if not is_admin(
+        message.from_user.id
+    ):
+        return
+
+    uid = int(
+        message.text.split()[1]
+    )
+
+    await pool.execute(
+        """
+        UPDATE users
+        SET banned = TRUE
+        WHERE id = $1
+        """,
+        uid,
+    )
+
+    await message.answer(
+        "🔨 Пользователь заблокирован."
+    )
+
+
+@r.message(F.text.startswith("/unban "))
+async def unban(message: Message):
+
+    if not is_admin(
+        message.from_user.id
+    ):
+        return
+
+    uid = int(
+        message.text.split()[1]
+    )
+
+    await pool.execute(
+        """
+        UPDATE users
+        SET banned = FALSE
+        WHERE id = $1
+        """,
+        uid,
+    )
+
+    await message.answer(
+        "✅ Пользователь разблокирован."
+    )

@@ -1,43 +1,88 @@
 services:
+
   - type: web
-    name: fenix-coin-ultra
+    name: fenix-coin-web
+
     runtime: python
-    plan: free
 
     buildCommand: pip install -r requirements.txt
 
-    startCommand: python run.py
+    startCommand: uvicorn app.web:app --host 0.0.0.0 --port $PORT
 
     envVars:
 
       - key: PYTHON_VERSION
-        value: "3.12.10"
-
-      - key: BOT_TOKEN
-        sync: false
+        value: 3.12.10
 
       - key: DATABASE_URL
         fromDatabase:
-          name: fenix-coin-ultra-db
+          name: fenix-coin-db
           property: connectionString
 
-      - key: ADMIN_IDS
-        sync: false
-
-      - key: ADMIN_CHANNEL_ID
+      - key: BOT_TOKEN
         sync: false
 
       - key: BOT_USERNAME
         sync: false
 
+      - key: ADMIN_IDS
+        sync: false
+
       - key: WEBAPP_URL
         sync: false
+
+      - key: START_BALANCE
+        value: "1000"
 
       - key: REF_REWARD
         value: "600"
 
+      - key: MIN_BET
+        value: "10"
+
+      - key: MAX_BET
+        value: "100000"
+
+      - key: HOUSE_EDGE
+        value: "0.05"
+
+
+  - type: worker
+    name: fenix-coin-bot
+
+    runtime: python
+
+    buildCommand: pip install -r requirements.txt
+
+    startCommand: python -m app.bot
+
+    envVars:
+
+      - key: PYTHON_VERSION
+        value: 3.12.10
+
+      - key: DATABASE_URL
+        fromDatabase:
+          name: fenix-coin-db
+          property: connectionString
+
+      - key: BOT_TOKEN
+        sync: false
+
+      - key: BOT_USERNAME
+        sync: false
+
+      - key: ADMIN_IDS
+        sync: false
+
+      - key: WEBAPP_URL
+        sync: false
+
       - key: START_BALANCE
         value: "1000"
+
+      - key: REF_REWARD
+        value: "600"
 
       - key: MIN_BET
         value: "10"
@@ -51,10 +96,6 @@ services:
 
 databases:
 
-  - name: fenix-coin-ultra-db
-
-    plan: free
-
+  - name: fenix-coin-db
     databaseName: fenixcoin
-
     user: fenix

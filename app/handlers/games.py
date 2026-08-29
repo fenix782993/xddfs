@@ -1,36 +1,185 @@
-from aiogram import Router,F
+import random
+
+from aiogram import Router, F
 from aiogram.types import CallbackQuery
-from app.keyboards import games,back
-from app.ui import visual
-from app.db import balance,result,xp
-from app.native import EMOJI,win
-from app.games import crash_point,roulette,slots
-r=Router()
-DESC={
-"dice":"Telegram Dice 1–6. Максимум выигрывает.","darts":"Telegram Darts. Максимальная точность выигрывает.",
-"football":"Telegram Football. Удачный удар определяет результат.","basketball":"Telegram Basketball. Попадание приносит победу.",
-"bowling":"Telegram Bowling. Максимум кеглей — победа.","slots":"Telegram Slots. Редкие комбинации дают выплату.",
-"mines":"Mines 5×5. Открывай клетки и избегай мин.","crash":"Crash. Забери раунд до остановки множителя.",
-"roulette":"Roulette 0–36. Полная ставка будет в Mini App."}
-@r.callback_query(F.data=="games")
-async def menu(c):
-    await c.answer();await c.message.delete()
-    await c.message.answer_photo(visual("FENIX GAMES","Telegram Native + server games.\\nУ каждой игры отдельная механика.","🎮"),reply_markup=games())
-@r.callback_query(F.data.startswith("game:"))
-async def info(c):
-    k=c.data.split(":")[1];await c.answer();await c.message.delete()
-    await c.message.answer_photo(visual(k.upper(),DESC[k]+"\\n\\n💰 V1 ставка: 100 🔥","🎮"),reply_markup=back())
-@r.callback_query(F.data.startswith("play:"))
-async def play(c):
-    k=c.data.split(":")[1]
-    if k in EMOJI:
-        try: await balance(c.from_user.id,-100,"native_bet:"+k)
-        except: return await c.answer("Недостаточно Fenix Coin",show_alert=True)
-        d=await c.message.answer_dice(emoji=EMOJI[k]);w=win(k,d.dice.value)
-        if w: await balance(c.from_user.id,500,"native_win:"+k)
-        await result(c.from_user.id,w);await xp(c.from_user.id,25 if w else 5)
-        return await c.answer("🏆 Победа!" if w else "💀 Не повезло")
-    if k=="crash": await c.message.answer(f"📈 Crash x{crash_point()}")
-    elif k=="roulette": await c.message.answer(f"🎡 Roulette: {roulette()}")
-    elif k=="slots": await c.message.answer(f"🎰 {slots()}")
-    elif k=="mines": await c.message.answer("💣 Mines 5×5: полноценное поле подключается через Mini App API.")
+
+from app.db import balance, result
+from app.keyboards import games_menu, back
+
+
+r = Router()
+
+
+GAME_EMOJI = {
+    "dice": "🎲",
+    "darts": "🎯",
+    "football": "⚽",
+    "basketball": "🏀",
+    "bowling": "🎳",
+    "slots": "🎰",
+}
+
+
+async def play_game(
+    callback: CallbackQuery,
+    game: str,
+):
+
+    emoji = GAME_EMOJI[game]
+
+    await callback.message.edit_text(
+        (
+            f"{emoji} <b>{game.upper()}</b>\n\n"
+            "Введите ставку командой:\n\n"
+            f"<code>/bet {game} 100</code>"
+        ),
+        reply_markup=games_menu(),
+    )
+
+    await callback.answer()
+
+
+@r.callback_query(F.data.startswith("game_"))
+async def game(callback: CallbackQuery):
+
+    game_name = callback.data.replace(
+        "game_",
+        "",
+        1,
+    )
+
+    if game_name not in GAME_EMOJI:
+
+        await callback.answer(
+            "Игра ещё не подключена.",
+            show_alert=True,
+        )
+
+        return
+
+    await play_game(
+        callback,
+        game_name,
+    )
+
+
+@r.message(F.text.startswith("/bet "))
+async def bet(message):
+
+    parts = message.text.split()
+
+    if len(parts) != 3:
+
+        await message.answer(
+            "Использование:\n"
+            "<code>/bet dice 100</code>"
+        )
+
+        return
+
+    game = parts[1].lower()
+
+    try:
+        amount = int(parts[2])
+    except ValueError:
+
+        await message.answer(
+            "Ставка должна быть числом."
+        )
+
+        return
+
+    if game not in GAME_EMOJI:
+
+        await message.answer(
+            "Неизвестная игра."
+        )
+
+        return
+
+    if amount <= 0:
+
+        await message.answer(
+            "Ставка должна быть больше 0."
+        )
+
+        return
+
+    # списываем ставку
+    try:
+
+        await balance(
+            message.from_user.id,
+            -amount,
+            f"bet:{game}",
+        )
+
+    except ValueError as error:
+
+        if str(error) == "insufficient_funds":
+
+            await message.answer(
+                "❌ Недостаточно Fenix Coin."
+            )
+
+        else:
+
+            await message.answer(
+                "❌ Не удалось сделать ставку."
+            )
+
+        return
+
+    # Telegram animation
+    dice = await message.answer_dice(
+        emoji=GAME_EMOJI[game]
+    )
+
+    value = dice.dice.value
+
+    # базовая механика
+    win = value >= 4
+
+    if win:
+
+        multiplier = 1.8
+
+        reward = int(
+            amount * multiplier
+        )
+
+        await balance(
+            message.from_user.id,
+            reward,
+            f"win:{game}",
+        )
+
+        await result(
+            message.from_user.id,
+            True,
+        )
+
+        await message.answer(
+            (
+                "🔥 <b>ПОБЕДА!</b>\n\n"
+                f"{GAME_EMOJI[game]} "
+                f"Результат: <b>{value}</b>\n"
+                f"💰 Выигрыш: <b>+{reward} 🔥</b>"
+            )
+        )
+
+    else:
+
+        await result(
+            message.from_user.id,
+            False,
+        )
+
+        await message.answer(
+            (
+                "💀 <b>ПРОИГРЫШ</b>\n\n"
+                f"{GAME_EMOJI[game]} "
+                f"Результат: <b>{value}</b>\n"
+                f"💸 Потеряно: <b>{amount} 🔥</b>"
+            )
+        )

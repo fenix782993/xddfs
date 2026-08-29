@@ -1,26 +1,81 @@
 import os
 from dataclasses import dataclass
-from dotenv import load_dotenv
-load_dotenv()
 
-def ids(v):
-    return {int(x.strip()) for x in (v or "").split(",") if x.strip()}
 
-@dataclass(frozen=True)
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+@dataclass
 class Settings:
-    bot_token: str = os.getenv("BOT_TOKEN","")
-    database_url: str = os.getenv("DATABASE_URL","")
-    admin_ids: set[int] = None
-    admin_channel_id: int|None = None
-    bot_username: str = os.getenv("BOT_USERNAME","")
-    webapp_url: str = os.getenv("WEBAPP_URL","")
-    ref_reward: int = int(os.getenv("REF_REWARD","600"))
-    start_balance: int = int(os.getenv("START_BALANCE","1000"))
-    min_bet: int = int(os.getenv("MIN_BET","10"))
-    max_bet: int = int(os.getenv("MAX_BET","100000"))
-    house_edge: float = float(os.getenv("HOUSE_EDGE","0.05"))
+    # Telegram
+    bot_token: str = os.getenv("BOT_TOKEN", "")
+    bot_username: str = os.getenv("BOT_USERNAME", "")
 
-settings = Settings(
-    admin_ids=ids(os.getenv("ADMIN_IDS")),
-    admin_channel_id=int(os.getenv("ADMIN_CHANNEL_ID")) if os.getenv("ADMIN_CHANNEL_ID") else None
-)
+    # PostgreSQL
+    database_url: str = os.getenv("DATABASE_URL", "")
+
+    # Admin
+    admin_ids: str = os.getenv("ADMIN_IDS", "")
+
+    # Economy
+    start_balance: int = env_int(
+        "START_BALANCE",
+        1000
+    )
+
+    ref_reward: int = env_int(
+        "REF_REWARD",
+        600
+    )
+
+    min_bet: int = env_int(
+        "MIN_BET",
+        10
+    )
+
+    max_bet: int = env_int(
+        "MAX_BET",
+        100000
+    )
+
+    house_edge: float = env_float(
+        "HOUSE_EDGE",
+        0.05
+    )
+
+    # Web
+    webapp_url: str = os.getenv(
+        "WEBAPP_URL",
+        ""
+    )
+
+    @property
+    def admins(self) -> list[int]:
+        result = []
+
+        for value in self.admin_ids.split(","):
+            value = value.strip()
+
+            if not value:
+                continue
+
+            try:
+                result.append(int(value))
+            except ValueError:
+                pass
+
+        return result
+
+
+settings = Settings()

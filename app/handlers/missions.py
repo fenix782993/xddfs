@@ -1,11 +1,49 @@
-from aiogram import Router,F
+from aiogram import Router, F
 from aiogram.types import CallbackQuery
-from app.missions import list_active
+
+from app.db import pool, balance
 from app.keyboards import back
-from app.ui import visual
-r=Router()
-@r.callback_query(F.data=="missions")
-async def missions(c):
-    rows=await list_active()
-    t="\\n".join(f"#{x['id']} • {x['title']} — +{x['reward']} 🔥" for x in rows) or "Активных миссий нет."
-    await c.answer();await c.message.delete();await c.message.answer_photo(visual("MISSIONS",t,"🎯"),reply_markup=back())
+
+
+r = Router()
+
+
+@r.callback_query(F.data == "missions")
+async def missions(callback: CallbackQuery):
+
+    rows = await pool.fetch(
+        """
+        SELECT
+            id,
+            title,
+            reward,
+            kind,
+            target
+        FROM missions
+        WHERE active = TRUE
+        ORDER BY id DESC
+        """
+    )
+
+    text = "🎯 <b>АКТИВНЫЕ МИССИИ</b>\n\n"
+
+    if not rows:
+
+        text += "Миссий пока нет."
+
+    else:
+
+        for row in rows:
+
+            text += (
+                f"🔥 <b>{row['title']}</b>\n"
+                f"💰 +{row['reward']} 🔥\n"
+                f"📌 {row['kind']}\n\n"
+            )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=back(),
+    )
+
+    await callback.answer()
