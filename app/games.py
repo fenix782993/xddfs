@@ -1,396 +1,178 @@
-# ============================================================
-# FENIX COIN ULTRA
-# GAME ENGINE
-# ============================================================
-
 from __future__ import annotations
 
 import random
-import secrets
 from typing import Any, Dict, List, Optional
 
-from app.db import play_game, get_game
+
+# ============================================================
+# COMMON
+# ============================================================
+
+def _result(
+    game: str,
+    win: bool,
+    bet: int,
+    multiplier: float,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    win_amount = int(bet * multiplier) if win else 0
+
+    data = {
+        "game": game,
+        "win": win,
+        "bet": int(bet),
+        "multiplier": float(multiplier),
+        "win_amount": win_amount,
+        "profit": win_amount - int(bet),
+    }
+
+    if extra:
+        data.update(extra)
+
+    return data
 
 
 # ============================================================
-# HELPERS
+# DICE
 # ============================================================
 
-def _safe_bet(bet: int) -> int:
+def dice(bet: int, prediction: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Dice:
+    prediction 1-6 = ставка на конкретное число.
+    Без prediction — обычный бросок.
+    """
+
     bet = int(bet)
 
     if bet <= 0:
         raise ValueError("Ставка должна быть больше 0")
 
-    return bet
+    roll = random.randint(1, 6)
+
+    if prediction is not None:
+        prediction = int(prediction)
+
+        if prediction < 1 or prediction > 6:
+            raise ValueError("Число должно быть от 1 до 6")
+
+        win = roll == prediction
+        multiplier = 5.5
+    else:
+        win = roll >= 4
+        multiplier = 1.8
+
+    return _result(
+        "dice",
+        win,
+        bet,
+        multiplier,
+        {
+            "roll": roll,
+            "prediction": prediction,
+        },
+    )
 
 
-def _money(value: Any) -> int:
-    return int(value or 0)
+# ============================================================
+# COIN FLIP
+# ============================================================
 
-
-def _result(
-    game: str,
+def coinflip(
     bet: int,
-    win: int,
-    multiplier: Optional[float],
-    data: Dict[str, Any],
+    choice: Optional[str] = None,
 ) -> Dict[str, Any]:
 
-    return {
-        "game": game,
-        "bet": bet,
-        "win_amount": win,
-        "multiplier": multiplier,
-        "result": data,
-    }
+    bet = int(bet)
 
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
 
-# ============================================================
-# DICE
-# Telegram dice style: 1..6
-# ============================================================
+    result = random.choice(["heads", "tails"])
 
-async def play_dice(user_id: int, bet: int) -> Dict[str, Any]:
+    if choice:
+        choice = choice.lower().strip()
 
-    bet = _safe_bet(bet)
+        if choice not in ("heads", "tails"):
+            raise ValueError("choice должен быть heads или tails")
 
-    value = random.randint(1, 6)
+        win = result == choice
+    else:
+        win = result == "heads"
 
-    multipliers = {
-        1: 0.0,
-        2: 0.0,
-        3: 0.0,
-        4: 1.5,
-        5: 2.0,
-        6: 3.0,
-    }
-
-    multiplier = multipliers[value]
-    win = int(bet * multiplier)
-
-    result = await play_game(
-        user_id=user_id,
-        game_code="dice",
-        bet=bet,
-        win=win,
-        multiplier=multiplier,
-        result_data={
-            "value": value,
-            "type": "dice",
-        },
-    )
-
-    return {
-        **result,
-        "value": value,
-        "multiplier": multiplier,
-    }
-
-
-# ============================================================
-# DARTS
-# Telegram darts style: 1..6
-# ============================================================
-
-async def play_darts(user_id: int, bet: int) -> Dict[str, Any]:
-
-    bet = _safe_bet(bet)
-
-    value = random.randint(1, 6)
-
-    multipliers = {
-        1: 0.0,
-        2: 0.0,
-        3: 1.5,
-        4: 2.0,
-        5: 3.0,
-        6: 5.0,
-    }
-
-    multiplier = multipliers[value]
-    win = int(bet * multiplier)
-
-    result = await play_game(
-        user_id,
-        "darts",
-        bet,
+    return _result(
+        "coinflip",
         win,
-        multiplier,
-        {
-            "value": value,
-            "type": "darts",
-        },
-    )
-
-    return {
-        **result,
-        "value": value,
-        "multiplier": multiplier,
-    }
-
-
-# ============================================================
-# FOOTBALL
-# Telegram football style
-# ============================================================
-
-async def play_football(user_id: int, bet: int) -> Dict[str, Any]:
-
-    bet = _safe_bet(bet)
-
-    value = random.randint(1, 5)
-
-    multipliers = {
-        1: 0.0,
-        2: 0.0,
-        3: 1.5,
-        4: 2.5,
-        5: 4.0,
-    }
-
-    multiplier = multipliers[value]
-    win = int(bet * multiplier)
-
-    result = await play_game(
-        user_id,
-        "football",
         bet,
-        win,
-        multiplier,
+        1.9,
         {
-            "value": value,
-            "type": "football",
+            "result": result,
+            "choice": choice,
         },
     )
-
-    return {
-        **result,
-        "value": value,
-        "multiplier": multiplier,
-    }
-
-
-# ============================================================
-# BASKETBALL
-# ============================================================
-
-async def play_basketball(user_id: int, bet: int) -> Dict[str, Any]:
-
-    bet = _safe_bet(bet)
-
-    value = random.randint(1, 5)
-
-    multipliers = {
-        1: 0.0,
-        2: 0.0,
-        3: 1.5,
-        4: 2.5,
-        5: 4.0,
-    }
-
-    multiplier = multipliers[value]
-    win = int(bet * multiplier)
-
-    result = await play_game(
-        user_id,
-        "basketball",
-        bet,
-        win,
-        multiplier,
-        {
-            "value": value,
-            "type": "basketball",
-        },
-    )
-
-    return {
-        **result,
-        "value": value,
-        "multiplier": multiplier,
-    }
-
-
-# ============================================================
-# BOWLING
-# ============================================================
-
-async def play_bowling(user_id: int, bet: int) -> Dict[str, Any]:
-
-    bet = _safe_bet(bet)
-
-    value = random.randint(1, 6)
-
-    multipliers = {
-        1: 0.0,
-        2: 0.0,
-        3: 1.25,
-        4: 1.75,
-        5: 2.5,
-        6: 5.0,
-    }
-
-    multiplier = multipliers[value]
-    win = int(bet * multiplier)
-
-    result = await play_game(
-        user_id,
-        "bowling",
-        bet,
-        win,
-        multiplier,
-        {
-            "value": value,
-            "type": "bowling",
-        },
-    )
-
-    return {
-        **result,
-        "value": value,
-        "multiplier": multiplier,
-    }
-
-
-# ============================================================
-# SLOTS
-# ============================================================
-
-SLOT_SYMBOLS = [
-    "🍒",
-    "🍋",
-    "🍊",
-    "🍇",
-    "🔔",
-    "⭐",
-    "💎",
-    "🔥",
-]
-
-
-def _slots_spin() -> List[str]:
-
-    return [
-        random.choice(SLOT_SYMBOLS),
-        random.choice(SLOT_SYMBOLS),
-        random.choice(SLOT_SYMBOLS),
-    ]
-
-
-def _slots_multiplier(symbols: List[str]) -> float:
-
-    a, b, c = symbols
-
-    if a == b == c == "💎":
-        return 20.0
-
-    if a == b == c == "🔥":
-        return 15.0
-
-    if a == b == c == "⭐":
-        return 10.0
-
-    if a == b == c:
-        return 8.0
-
-    if a == b or a == c or b == c:
-        return 2.0
-
-    return 0.0
-
-
-async def play_slots(user_id: int, bet: int) -> Dict[str, Any]:
-
-    bet = _safe_bet(bet)
-
-    symbols = _slots_spin()
-
-    multiplier = _slots_multiplier(symbols)
-
-    win = int(bet * multiplier)
-
-    result = await play_game(
-        user_id,
-        "slots",
-        bet,
-        win,
-        multiplier,
-        {
-            "symbols": symbols,
-            "type": "slots",
-        },
-    )
-
-    return {
-        **result,
-        "symbols": symbols,
-        "multiplier": multiplier,
-    }
 
 
 # ============================================================
 # ROULETTE
 # ============================================================
 
-ROULETTE_RED = {
-    1, 3, 5, 7, 9,
-    12, 14, 16, 18,
-    19, 21, 23, 25,
-    27, 30, 32, 34, 36,
-}
-
-
-async def play_roulette(
-    user_id: int,
+def roulette(
     bet: int,
-    choice: str,
+    choice: Optional[str] = None,
 ) -> Dict[str, Any]:
 
-    bet = _safe_bet(bet)
+    bet = int(bet)
 
-    choice = str(choice).lower().strip()
-
-    if choice not in {
-        "red",
-        "black",
-        "green",
-        "odd",
-        "even",
-    }:
-        raise ValueError("Неверная ставка рулетки")
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
 
     number = random.randint(0, 36)
 
+    red_numbers = {
+        1, 3, 5, 7, 9, 12, 14, 16, 18,
+        19, 21, 23, 25, 27, 30, 32, 34, 36
+    }
+
     if number == 0:
         color = "green"
-    elif number in ROULETTE_RED:
+    elif number in red_numbers:
         color = "red"
     else:
         color = "black"
 
-    win = 0
-    multiplier = 0.0
+    choice = str(choice or "red").lower()
 
-    if choice == color:
+    if choice in ("red", "black", "green"):
+        win = color == choice
 
         if choice == "green":
             multiplier = 14.0
         else:
-            multiplier = 2.0
+            multiplier = 1.9
 
-    elif choice == "odd" and number != 0 and number % 2 == 1:
-        multiplier = 2.0
+    elif choice == "even":
+        win = number != 0 and number % 2 == 0
+        multiplier = 1.9
 
-    elif choice == "even" and number != 0 and number % 2 == 0:
-        multiplier = 2.0
+    elif choice == "odd":
+        win = number % 2 == 1
+        multiplier = 1.9
 
-    win = int(bet * multiplier)
+    elif choice == "low":
+        win = 1 <= number <= 18
+        multiplier = 1.9
 
-    result = await play_game(
-        user_id,
+    elif choice == "high":
+        win = 19 <= number <= 36
+        multiplier = 1.9
+
+    else:
+        raise ValueError("Неизвестная ставка рулетки")
+
+    return _result(
         "roulette",
-        bet,
         win,
+        bet,
         multiplier,
         {
             "number": number,
@@ -399,672 +181,567 @@ async def play_roulette(
         },
     )
 
-    return {
-        **result,
-        "number": number,
-        "color": color,
-        "choice": choice,
-        "multiplier": multiplier,
-    }
-
 
 # ============================================================
-# CRASH
+# SLOTS
 # ============================================================
 
-def _crash_multiplier() -> float:
-
-    # house edge ~5%
-    value = random.random()
-
-    if value < 0.03:
-        return 1.0
-
-    multiplier = 1.0 / max(0.01, (1.0 - value))
-
-    multiplier *= 0.95
-
-    return max(
-        1.0,
-        round(min(multiplier, 100.0), 2),
-    )
+SLOT_SYMBOLS = ["🍒", "🍋", "🔔", "⭐", "💎", "7️⃣"]
 
 
-async def play_crash(
-    user_id: int,
-    bet: int,
-    cashout: Optional[float] = None,
-) -> Dict[str, Any]:
+def slots(bet: int) -> Dict[str, Any]:
 
-    bet = _safe_bet(bet)
+    bet = int(bet)
 
-    crash_at = _crash_multiplier()
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
 
-    if cashout is None:
-        cashout = crash_at
+    reels = [
+        random.choice(SLOT_SYMBOLS),
+        random.choice(SLOT_SYMBOLS),
+        random.choice(SLOT_SYMBOLS),
+    ]
 
-    cashout = float(cashout)
+    if reels[0] == reels[1] == reels[2]:
 
-    if cashout < 1.0:
-        raise ValueError("Cashout должен быть >= 1.0")
+        if reels[0] == "7️⃣":
+            multiplier = 15.0
+        elif reels[0] == "💎":
+            multiplier = 10.0
+        else:
+            multiplier = 7.0
 
-    if cashout <= crash_at:
+        win = True
 
-        multiplier = cashout
-        win = int(bet * multiplier)
-
-        status = "cashed_out"
+    elif (
+        reels[0] == reels[1]
+        or reels[1] == reels[2]
+        or reels[0] == reels[2]
+    ):
+        multiplier = 2.0
+        win = True
 
     else:
-
         multiplier = 0.0
-        win = 0
+        win = False
 
-        status = "crashed"
-
-    result = await play_game(
-        user_id,
-        "crash",
-        bet,
+    return _result(
+        "slots",
         win,
+        bet,
         multiplier,
         {
-            "crash_at": crash_at,
-            "cashout": cashout,
-            "status": status,
+            "reels": reels,
         },
     )
 
-    return {
-        **result,
-        "crash_at": crash_at,
-        "cashout": cashout,
-        "status": status,
-    }
-
 
 # ============================================================
-# MINES 5x5
+# HIGH LOW
 # ============================================================
 
-MINES_SIZE = 5
-MINES_CELLS = 25
-
-
-def _mine_positions(count: int) -> List[int]:
-
-    if count < 1:
-        count = 1
-
-    if count > 24:
-        count = 24
-
-    return secrets.SystemRandom().sample(
-        range(MINES_CELLS),
-        count,
-    )
-
-
-def create_mines_board(
-    mines: int = 5,
-) -> Dict[str, Any]:
-
-    positions = _mine_positions(mines)
-
-    return {
-        "size": 5,
-        "mines": mines,
-        "mine_positions": positions,
-        "opened": [],
-    }
-
-
-def mines_multiplier(
-    opened: int,
-    mines: int,
-) -> float:
-
-    safe_cells = MINES_CELLS - mines
-
-    if opened <= 0:
-        return 1.0
-
-    if opened >= safe_cells:
-        return 24.0
-
-    multiplier = 1.0
-
-    for i in range(opened):
-        multiplier *= (
-            MINES_CELLS - mines - i
-        ) / (
-            MINES_CELLS - i
-        )
-
-    if multiplier <= 0:
-        return 1.0
-
-    return round(
-        0.96 / multiplier,
-        2,
-    )
-
-
-async def play_mines(
-    user_id: int,
+def highlow(
     bet: int,
-    mines: int = 5,
-    opened: Optional[List[int]] = None,
+    choice: str = "high",
 ) -> Dict[str, Any]:
 
-    bet = _safe_bet(bet)
+    bet = int(bet)
 
-    mines = int(mines)
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
 
-    if mines < 1 or mines > 24:
-        raise ValueError(
-            "Количество мин должно быть от 1 до 24"
-        )
+    choice = str(choice).lower()
 
-    opened = opened or []
+    if choice not in ("high", "low"):
+        raise ValueError("choice должен быть high или low")
 
-    for cell in opened:
-
-        if int(cell) < 0 or int(cell) >= 25:
-            raise ValueError(
-                "Клетка должна быть от 0 до 24"
-            )
-
-    board = create_mines_board(mines)
-
-    mine_positions = set(
-        board["mine_positions"]
-    )
-
-    opened_set = set(
-        int(x) for x in opened
-    )
-
-    hit_mine = bool(
-        opened_set & mine_positions
-    )
-
-    if hit_mine:
-
-        multiplier = 0.0
-        win = 0
-
-    else:
-
-        multiplier = mines_multiplier(
-            len(opened_set),
-            mines,
-        )
-
-        win = int(
-            bet * multiplier
-        )
-
-    result = await play_game(
-        user_id,
-        "mines",
-        bet,
-        win,
-        multiplier,
-        {
-            "mines": mines,
-            "opened": list(opened_set),
-            "mine_positions": list(
-                mine_positions
-            ),
-            "hit_mine": hit_mine,
-        },
-    )
-
-    return {
-        **result,
-        "mines": mines,
-        "opened": list(opened_set),
-        "mine_positions": list(
-            mine_positions
-        ),
-        "hit_mine": hit_mine,
-    }
-
-
-# ============================================================
-# HIGH / LOW
-# ============================================================
-
-async def play_high_low(
-    user_id: int,
-    bet: int,
-    choice: str,
-) -> Dict[str, Any]:
-
-    bet = _safe_bet(bet)
-
-    choice = choice.lower().strip()
-
-    if choice not in {
-        "high",
-        "low",
-    }:
-        raise ValueError(
-            "choice должен быть high или low"
-        )
-
-    value = random.randint(1, 100)
+    number = random.randint(1, 100)
 
     if choice == "high":
-        success = value >= 51
+        win = number > 50
     else:
-        success = value <= 50
+        win = number < 50
 
-    multiplier = 1.9 if success else 0.0
-
-    win = int(
-        bet * multiplier
-    )
-
-    result = await play_game(
-        user_id,
-        "high_low",
-        bet,
+    return _result(
+        "highlow",
         win,
-        multiplier,
+        bet,
+        1.9,
         {
-            "value": value,
+            "number": number,
             "choice": choice,
         },
     )
-
-    return {
-        **result,
-        "value": value,
-        "choice": choice,
-    }
-
-
-# ============================================================
-# COIN FLIP
-# ============================================================
-
-async def play_coinflip(
-    user_id: int,
-    bet: int,
-    choice: str,
-) -> Dict[str, Any]:
-
-    bet = _safe_bet(bet)
-
-    choice = choice.lower().strip()
-
-    if choice not in {
-        "heads",
-        "tails",
-    }:
-        raise ValueError(
-            "choice должен быть heads или tails"
-        )
-
-    result_value = random.choice(
-        ["heads", "tails"]
-    )
-
-    success = result_value == choice
-
-    multiplier = 1.9 if success else 0.0
-
-    win = int(
-        bet * multiplier
-    )
-
-    result = await play_game(
-        user_id,
-        "coinflip",
-        bet,
-        win,
-        multiplier,
-        {
-            "choice": choice,
-            "result": result_value,
-        },
-    )
-
-    return {
-        **result,
-        "choice": choice,
-        "result_value": result_value,
-    }
 
 
 # ============================================================
 # ROCK PAPER SCISSORS
 # ============================================================
 
-RPS = {
-    "rock",
-    "paper",
-    "scissors",
-}
+RPS = ["rock", "paper", "scissors"]
 
 
-def _rps_winner(
-    player: str,
-    enemy: str,
-) -> str:
-
-    if player == enemy:
-        return "draw"
-
-    wins = {
-        ("rock", "scissors"),
-        ("scissors", "paper"),
-        ("paper", "rock"),
-    }
-
-    if (player, enemy) in wins:
-        return "player"
-
-    return "enemy"
-
-
-async def play_rps(
-    user_id: int,
+def rps(
     bet: int,
     choice: str,
 ) -> Dict[str, Any]:
 
-    bet = _safe_bet(bet)
+    bet = int(bet)
 
-    choice = choice.lower().strip()
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
+
+    choice = choice.lower()
 
     if choice not in RPS:
-        raise ValueError(
-            "Неверный вариант"
-        )
+        raise ValueError("choice должен быть rock, paper или scissors")
 
-    enemy = random.choice(
-        list(RPS)
-    )
+    enemy = random.choice(RPS)
 
-    winner = _rps_winner(
-        choice,
-        enemy,
-    )
-
-    if winner == "player":
-        multiplier = 1.9
-        win = int(
-            bet * multiplier
-        )
-
-    elif winner == "draw":
+    if choice == enemy:
+        win = False
         multiplier = 1.0
-        win = bet
+
+    elif (
+        (choice == "rock" and enemy == "scissors")
+        or (choice == "paper" and enemy == "rock")
+        or (choice == "scissors" and enemy == "paper")
+    ):
+        win = True
+        multiplier = 1.9
 
     else:
+        win = False
         multiplier = 0.0
-        win = 0
 
-    result = await play_game(
-        user_id,
+    return _result(
         "rps",
-        bet,
         win,
+        bet,
         multiplier,
         {
             "player": choice,
             "enemy": enemy,
-            "winner": winner,
         },
     )
 
-    return {
-        **result,
-        "player": choice,
-        "enemy": enemy,
-        "winner": winner,
-    }
-
 
 # ============================================================
-# COLOR
+# MINES
 # ============================================================
 
-COLORS = [
-    "red",
-    "black",
-    "blue",
-    "green",
-    "yellow",
-]
-
-
-async def play_color(
-    user_id: int,
+def mines(
     bet: int,
-    choice: str,
+    mines_count: int = 5,
+    size: int = 5,
+    opened: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
 
-    bet = _safe_bet(bet)
+    bet = int(bet)
+    mines_count = int(mines_count)
+    size = int(size)
 
-    choice = choice.lower().strip()
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
 
-    if choice not in COLORS:
-        raise ValueError(
-            "Неверный цвет"
-        )
+    total = size * size
 
-    result_color = random.choice(
-        COLORS
+    if mines_count < 1 or mines_count >= total:
+        raise ValueError("Некорректное количество мин")
+
+    mine_positions = set(
+        random.sample(range(total), mines_count)
     )
 
-    if result_color == choice:
+    opened = opened or []
 
-        multiplier = 4.0
+    hit_mine = any(
+        int(cell) in mine_positions
+        for cell in opened
+    )
 
-        win = int(
-            bet * multiplier
-        )
+    safe_opened = sum(
+        1
+        for cell in opened
+        if int(cell) not in mine_positions
+    )
 
-    else:
-
+    if hit_mine:
         multiplier = 0.0
+        win = False
+    elif safe_opened == 0:
+        multiplier = 1.0
+        win = False
+    else:
+        multiplier = round(
+            1.0 + (safe_opened * 0.35),
+            2,
+        )
+        win = True
 
-        win = 0
-
-    result = await play_game(
-        user_id,
-        "color",
-        bet,
+    return _result(
+        "mines",
         win,
+        bet,
         multiplier,
         {
-            "choice": choice,
-            "result": result_color,
+            "size": size,
+            "mines_count": mines_count,
+            "mine_positions": list(mine_positions),
+            "opened": opened,
+            "safe_opened": safe_opened,
+            "hit_mine": hit_mine,
         },
     )
 
-    return {
-        **result,
-        "choice": choice,
-        "result_color": result_color,
+
+# ============================================================
+# CRASH
+# ============================================================
+
+def crash(bet: int) -> Dict[str, Any]:
+
+    bet = int(bet)
+
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
+
+    # House edge.
+    value = random.random()
+
+    if value < 0.03:
+        multiplier = 1.0
+    else:
+        multiplier = max(
+            1.0,
+            round(
+                1 / max(random.random(), 0.01),
+                2,
+            ),
+        )
+
+    # Ограничение для игры.
+    multiplier = min(multiplier, 100.0)
+
+    cashout = round(
+        random.uniform(1.0, multiplier),
+        2,
+    )
+
+    win = cashout < multiplier
+
+    return _result(
+        "crash",
+        win,
+        bet,
+        cashout if win else 0.0,
+        {
+            "crash_at": multiplier,
+            "cashout": cashout,
+        },
+    )
+
+
+# ============================================================
+# RACE
+# ============================================================
+
+def race(bet: int) -> Dict[str, Any]:
+
+    bet = int(bet)
+
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
+
+    racers = [
+        {
+            "id": i,
+            "position": random.randint(1, 100),
+        }
+        for i in range(1, 5)
+    ]
+
+    racers.sort(
+        key=lambda x: x["position"],
+        reverse=True,
+    )
+
+    winner = racers[0]
+
+    player_won = winner["id"] == 1
+
+    return _result(
+        "race",
+        player_won,
+        bet,
+        3.5,
+        {
+            "racers": racers,
+            "winner": winner["id"],
+        },
+    )
+
+
+# ============================================================
+# FOOTBALL
+# ============================================================
+
+def football(
+    bet: int,
+    prediction: str = "home",
+) -> Dict[str, Any]:
+
+    bet = int(bet)
+
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
+
+    prediction = prediction.lower()
+
+    if prediction not in (
+        "home",
+        "draw",
+        "away",
+    ):
+        raise ValueError(
+            "prediction должен быть home, draw или away"
+        )
+
+    home = random.randint(0, 5)
+    away = random.randint(0, 5)
+
+    if home > away:
+        result = "home"
+    elif home < away:
+        result = "away"
+    else:
+        result = "draw"
+
+    multiplier_map = {
+        "home": 1.8,
+        "draw": 3.2,
+        "away": 2.3,
     }
 
+    win = result == prediction
+
+    return _result(
+        "football",
+        win,
+        bet,
+        multiplier_map[result],
+        {
+            "home": home,
+            "away": away,
+            "prediction": prediction,
+            "result": result,
+        },
+    )
+
 
 # ============================================================
-# GAME ROUTER
+# BASKETBALL
 # ============================================================
 
-GAME_HANDLERS = {
-    "dice": play_dice,
-    "darts": play_darts,
-    "football": play_football,
-    "basketball": play_basketball,
-    "bowling": play_bowling,
-    "slots": play_slots,
-    "crash": play_crash,
-    "mines": play_mines,
-    "roulette": play_roulette,
-    "high_low": play_high_low,
-    "coinflip": play_coinflip,
-    "rps": play_rps,
-    "color": play_color,
+def basketball(
+    bet: int,
+    prediction: str = "home",
+) -> Dict[str, Any]:
+
+    bet = int(bet)
+
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
+
+    prediction = prediction.lower()
+
+    if prediction not in ("home", "away"):
+        raise ValueError(
+            "prediction должен быть home или away"
+        )
+
+    home = random.randint(70, 130)
+    away = random.randint(70, 130)
+
+    result = "home" if home > away else "away"
+
+    win = result == prediction
+
+    return _result(
+        "basketball",
+        win,
+        bet,
+        1.9,
+        {
+            "home": home,
+            "away": away,
+            "prediction": prediction,
+            "result": result,
+        },
+    )
+
+
+# ============================================================
+# PLINKO
+# ============================================================
+
+def plinko(
+    bet: int,
+    rows: int = 8,
+) -> Dict[str, Any]:
+
+    bet = int(bet)
+    rows = int(rows)
+
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
+
+    if rows < 4 or rows > 16:
+        raise ValueError("rows должен быть от 4 до 16")
+
+    position = 0
+
+    path = []
+
+    for _ in range(rows):
+        direction = random.choice([-1, 1])
+        position += direction
+        path.append(direction)
+
+    distance = abs(position)
+
+    multipliers = [
+        0.2,
+        0.5,
+        0.8,
+        1.2,
+        1.8,
+        2.5,
+        5.0,
+    ]
+
+    index = min(
+        distance,
+        len(multipliers) - 1,
+    )
+
+    multiplier = multipliers[index]
+
+    win = multiplier > 1.0
+
+    return _result(
+        "plinko",
+        win,
+        bet,
+        multiplier,
+        {
+            "rows": rows,
+            "path": path,
+            "position": position,
+        },
+    )
+
+
+# ============================================================
+# BLACKJACK
+# ============================================================
+
+def blackjack(bet: int) -> Dict[str, Any]:
+
+    bet = int(bet)
+
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
+
+    player = random.randint(16, 21)
+    dealer = random.randint(15, 21)
+
+    if player > dealer:
+        win = True
+        multiplier = 2.0
+    elif player == dealer:
+        win = False
+        multiplier = 1.0
+    else:
+        win = False
+        multiplier = 0.0
+
+    return _result(
+        "blackjack",
+        win,
+        bet,
+        multiplier,
+        {
+            "player": player,
+            "dealer": dealer,
+        },
+    )
+
+
+# ============================================================
+# GAME REGISTRY
+# ============================================================
+
+GAMES = {
+    "dice": dice,
+    "coinflip": coinflip,
+    "roulette": roulette,
+    "slots": slots,
+    "highlow": highlow,
+    "rps": rps,
+    "mines": mines,
+    "crash": crash,
+    "race": race,
+    "football": football,
+    "basketball": basketball,
+    "plinko": plinko,
+    "blackjack": blackjack,
 }
 
 
-async def play(
-    user_id: int,
+def get_game(game_code: str):
+    return GAMES.get(str(game_code).lower())
+
+
+def get_games() -> List[str]:
+    return list(GAMES.keys())
+
+
+def play(
     game_code: str,
     bet: int,
     **kwargs,
 ) -> Dict[str, Any]:
 
-    game_code = str(
-        game_code
-    ).lower().strip()
+    game = get_game(game_code)
 
-    handler = GAME_HANDLERS.get(
-        game_code
-    )
-
-    if handler is None:
+    if game is None:
         raise ValueError(
             f"Игра '{game_code}' не найдена"
         )
 
-    game = await get_game(
-        game_code
-    )
-
-    if not game:
-        raise ValueError(
-            f"Игра '{game_code}' не зарегистрирована в БД"
-        )
-
-    if not game["enabled"]:
-        raise ValueError(
-            "Игра временно отключена"
-        )
-
-    bet = _safe_bet(bet)
-
-    if bet < int(game["min_bet"]):
-        raise ValueError(
-            f"Минимальная ставка: {game['min_bet']}"
-        )
-
-    if bet > int(game["max_bet"]):
-        raise ValueError(
-            f"Максимальная ставка: {game['max_bet']}"
-        )
-
-    return await handler(
-        user_id,
+    return game(
         bet,
         **kwargs,
     )
 
 
-# ============================================================
-# GAME LIST
-# ============================================================
-
-async def available_games() -> List[Dict[str, Any]]:
-
-    from app.db import get_games
-
-    rows = await get_games()
-
-    return [
-        dict(row)
-        for row in rows
-    ]
-
-
-# ============================================================
-# GAME INFO
-# ============================================================
-
-GAME_RULES = {
-
-    "dice": {
-        "title": "🎲 Dice",
-        "rules": "Бросок кости 1–6. Чем выше результат, тем выше множитель.",
-    },
-
-    "darts": {
-        "title": "🎯 Darts",
-        "rules": "Бросок дротика. Попадание в более высокий сектор увеличивает множитель.",
-    },
-
-    "football": {
-        "title": "⚽ Football",
-        "rules": "Удар по воротам. Удачный удар приносит множитель ставки.",
-    },
-
-    "basketball": {
-        "title": "🏀 Basketball",
-        "rules": "Бросок в кольцо. Чем лучше результат, тем выше награда.",
-    },
-
-    "bowling": {
-        "title": "🎳 Bowling",
-        "rules": "Бросок шара. Максимальный результат даёт максимальный множитель.",
-    },
-
-    "slots": {
-        "title": "🎰 Slots",
-        "rules": "Собери одинаковые символы. Три одинаковых символа дают большой множитель.",
-    },
-
-    "mines": {
-        "title": "💣 Mines",
-        "rules": "Открывай клетки 5×5 и избегай мин. Чем больше безопасных клеток открыл — тем выше множитель.",
-    },
-
-    "crash": {
-        "title": "📈 Crash",
-        "rules": "Множитель растёт. Забери выигрыш до того, как произойдёт crash.",
-    },
-
-    "roulette": {
-        "title": "🎡 Roulette",
-        "rules": "Выбирай цвет или чётность числа. Выплата зависит от выбранного исхода.",
-    },
-
-    "high_low": {
-        "title": "⬆️ High / Low",
-        "rules": "Выбери высокий или низкий результат.",
-    },
-
-    "coinflip": {
-        "title": "🪙 Coin Flip",
-        "rules": "Выбери орёл или решку.",
-    },
-
-    "rps": {
-        "title": "✊ RPS",
-        "rules": "Камень, ножницы, бумага против бота.",
-    },
-
-    "color": {
-        "title": "🌈 Color",
-        "rules": "Выбери цвет. Совпадение приносит выигрыш.",
-    },
-}
-
-
-def get_game_rules(
-    game_code: str,
-) -> Dict[str, Any]:
-
-    return GAME_RULES.get(
-        game_code,
-        {
-            "title": game_code,
-            "rules": "Правила игры отсутствуют.",
-        },
-    )
+__all__ = [
+    "dice",
+    "coinflip",
+    "roulette",
+    "slots",
+    "highlow",
+    "rps",
+    "mines",
+    "crash",
+    "race",
+    "football",
+    "basketball",
+    "plinko",
+    "blackjack",
+    "get_game",
+    "get_games",
+    "play",
+    "GAMES",
+]
