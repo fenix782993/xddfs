@@ -1244,3 +1244,388 @@ async def get_stats():
             "games": games or 0,
             "pvp": pvp or 0,
         }
+# =========================================================
+# COMPATIBILITY FUNCTIONS FOR WEB.PY
+# =========================================================
+
+async def leaderboard(limit: int = 10):
+    return await get_top_users(limit)
+
+
+async def get_leaderboard(limit: int = 10):
+    return await get_top_users(limit)
+
+
+async def get_user_by_id(telegram_id: int):
+    return await get_user(telegram_id)
+
+
+async def ensure_user(
+    telegram_id: int,
+    username: str = "",
+    first_name: str = "",
+    last_name: str = "",
+):
+    user = await get_user(telegram_id)
+
+    if user:
+        return user
+
+    return await create_user(
+        telegram_id=telegram_id,
+        username=username,
+        first_name=first_name,
+        last_name=last_name,
+    )
+
+
+async def add_coins(
+    telegram_id: int,
+    amount: int,
+    reason: str = "system",
+):
+    return await change_balance(
+        telegram_id,
+        amount,
+        reason,
+    )
+
+
+async def remove_coins(
+    telegram_id: int,
+    amount: int,
+    reason: str = "game",
+):
+    return await change_balance(
+        telegram_id,
+        -abs(amount),
+        reason,
+    )
+
+
+async def get_balance(
+    telegram_id: int,
+):
+    user = await get_user(telegram_id)
+
+    if not user:
+        return 0
+
+    return user["balance"]
+
+
+async def update_user(
+    telegram_id: int,
+    **fields: Any,
+):
+
+    allowed = {
+        "username",
+        "first_name",
+        "last_name",
+        "balance",
+        "xp",
+        "level",
+        "games_played",
+        "games_won",
+        "games_lost",
+        "referrals",
+        "referral_earned",
+        "referrer_id",
+        "is_admin",
+        "is_banned",
+    }
+
+    fields = {
+        key: value
+        for key, value in fields.items()
+        if key in allowed
+    }
+
+    if not fields:
+        return await get_user(telegram_id)
+
+    pool = await get_pool()
+
+    set_parts = []
+    values = []
+
+    index = 1
+
+    for key, value in fields.items():
+        set_parts.append(
+            f"{key} = ${index}"
+        )
+        values.append(value)
+        index += 1
+
+    values.append(telegram_id)
+
+    query = f"""
+        UPDATE users
+        SET
+            {", ".join(set_parts)},
+            updated_at = NOW()
+        WHERE telegram_id = ${index}
+        RETURNING *
+    """
+
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            query,
+            *values,
+        )
+
+
+async def get_all_users(
+    limit: int = 1000,
+    offset: int = 0,
+):
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT *
+            FROM users
+            ORDER BY id DESC
+            LIMIT $1
+            OFFSET $2
+            """,
+            limit,
+            offset,
+        )
+
+
+async def count_users():
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM users
+            """
+        )
+
+
+async def get_game(
+    code: str,
+):
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """
+            SELECT *
+            FROM games
+            WHERE code = $1
+            """,
+            code,
+        )
+
+
+async def get_games():
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT *
+            FROM games
+            WHERE enabled = TRUE
+            ORDER BY id
+            """
+        )
+
+
+async def get_all_games():
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT *
+            FROM games
+            ORDER BY id
+            """
+        )
+
+
+async def set_game_enabled(
+    code: str,
+    enabled: bool,
+):
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """
+            UPDATE games
+            SET enabled = $1
+            WHERE code = $2
+            RETURNING *
+            """,
+            enabled,
+            code,
+        )
+
+
+async def get_user_stats(
+    telegram_id: int,
+):
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+
+        user = await conn.fetchrow(
+            """
+            SELECT *
+            FROM users
+            WHERE telegram_id = $1
+            """,
+            telegram_id,
+        )
+
+        if not user:
+            return None
+
+        games = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (
+                    WHERE win = TRUE
+                ) AS wins,
+                COUNT(*) FILTER (
+                    WHERE win = FALSE
+                ) AS losses,
+                COALESCE(
+                    SUM(profit),
+                    0
+                ) AS profit
+            FROM game_results
+            WHERE user_id = $1
+            """,
+            telegram_id,
+        )
+
+        return {
+            "user": user,
+            "games": games,
+        }
+
+
+async def get_transactions(
+    telegram_id: int,
+    limit: int = 50,
+):
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT *
+            FROM transactions
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            telegram_id,
+            limit,
+        )
+
+
+async def create_pvp_room(
+    room_code: str,
+    creator_id: int,
+    game_code: str,
+    bet: int,
+):
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """
+            INSERT INTO pvp_rooms(
+                room_code,
+                creator_id,
+                game_code,
+                bet
+            )
+            VALUES(
+                $1,
+                $2,
+                $3,
+                $4
+            )
+            RETURNING *
+            """,
+            room_code,
+            creator_id,
+            game_code,
+            bet,
+        )
+
+
+async def get_pvp_room(
+    room_code: str,
+):
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """
+            SELECT *
+            FROM pvp_rooms
+            WHERE room_code = $1
+            """,
+            room_code,
+        )
+
+
+async def join_pvp_room(
+    room_code: str,
+    opponent_id: int,
+):
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """
+            UPDATE pvp_rooms
+            SET
+                opponent_id = $1,
+                status = 'active'
+            WHERE room_code = $2
+            AND status = 'waiting'
+            RETURNING *
+            """,
+            opponent_id,
+            room_code,
+        )
+
+
+async def finish_pvp_room(
+    room_code: str,
+    winner_id: int,
+    loser_id: int,
+):
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """
+            UPDATE pvp_rooms
+            SET
+                winner_id = $1,
+                loser_id = $2,
+                status = 'finished',
+                finished_at = NOW()
+            WHERE room_code = $3
+            RETURNING *
+            """,
+            winner_id,
+            loser_id,
+            room_code,
+        )
