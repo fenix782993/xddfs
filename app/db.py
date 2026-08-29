@@ -713,6 +713,38 @@ async def init_db():
         await conn.execute(SCHEMA)
 
         # ----------------------------------------------------
+        # Safe migrations for databases created by older builds
+        # ----------------------------------------------------
+        # CREATE TABLE IF NOT EXISTS does not add columns to an
+        # already existing PostgreSQL table. Keep old Render DBs
+        # compatible with the current application.
+        for table, column, definition in [
+            ("games", "description", "TEXT"),
+            ("games", "emoji", "TEXT"),
+            ("games", "enabled", "BOOLEAN NOT NULL DEFAULT TRUE"),
+            ("games", "min_bet", "BIGINT NOT NULL DEFAULT 10"),
+            ("games", "max_bet", "BIGINT NOT NULL DEFAULT 100000"),
+            ("users", "xp", "BIGINT NOT NULL DEFAULT 0"),
+            ("users", "level", "INTEGER NOT NULL DEFAULT 1"),
+            ("users", "games", "BIGINT NOT NULL DEFAULT 0"),
+            ("users", "wins", "BIGINT NOT NULL DEFAULT 0"),
+            ("users", "losses", "BIGINT NOT NULL DEFAULT 0"),
+            ("users", "referrals", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "referred_by", "BIGINT"),
+            ("users", "referral_rewarded", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("users", "banned", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("users", "admin", "BOOLEAN NOT NULL DEFAULT FALSE"),
+            ("users", "streak", "INTEGER NOT NULL DEFAULT 0"),
+            ("users", "daily_claimed_at", "TIMESTAMPTZ"),
+            ("users", "last_activity_at", "TIMESTAMPTZ"),
+            ("users", "created_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()"),
+            ("users", "updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()"),
+        ]:
+            await conn.execute(
+                f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}'
+            )
+
+        # ----------------------------------------------------
         # Default games
         # ----------------------------------------------------
 
@@ -1344,6 +1376,23 @@ async def result(
         user_id,
         1 if win else 0,
         0 if win else 1,
+    )
+
+
+# ============================================================
+# GAMES
+# ============================================================
+
+async def get_games():
+    db = check_pool()
+    return await db.fetch(
+        """
+        SELECT id, code, title, description, emoji, enabled,
+               min_bet, max_bet, created_at
+        FROM games
+        WHERE enabled = TRUE
+        ORDER BY id ASC
+        """
     )
 
 
