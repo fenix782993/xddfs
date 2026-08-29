@@ -1,12 +1,41 @@
-import asyncpg
+# ============================================================
+# FENIX COIN ULTRA
+# app/db.py
+# PostgreSQL / asyncpg
+# ============================================================
+
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from typing import Optional, Any
+
+import asyncpg
 
 from app.config import settings
 
 
+# ============================================================
+# GLOBAL POOL
+# ============================================================
+
 pool: Optional[asyncpg.Pool] = None
+
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def check_pool() -> asyncpg.Pool:
+    if pool is None:
+        raise RuntimeError("Database pool is not initialized")
+    return pool
+
+
+def json_dump(value: Any) -> str:
+    return json.dumps(
+        value if value is not None else {},
+        ensure_ascii=False,
+        default=str,
+    )
 
 
 # ============================================================
@@ -14,14 +43,8 @@ pool: Optional[asyncpg.Pool] = None
 # ============================================================
 
 SCHEMA = r"""
-
--- ==========================================================
--- USERS
--- ==========================================================
-
 CREATE TABLE IF NOT EXISTS users (
     id BIGINT PRIMARY KEY,
-
     username TEXT,
     first_name TEXT,
     last_name TEXT,
@@ -41,11 +64,9 @@ CREATE TABLE IF NOT EXISTS users (
     referral_rewarded BOOLEAN NOT NULL DEFAULT FALSE,
 
     banned BOOLEAN NOT NULL DEFAULT FALSE,
-
     admin BOOLEAN NOT NULL DEFAULT FALSE,
 
     streak INTEGER NOT NULL DEFAULT 0,
-
     daily_claimed_at TIMESTAMPTZ,
 
     last_activity_at TIMESTAMPTZ,
@@ -54,22 +75,6 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-
-CREATE INDEX IF NOT EXISTS idx_users_balance
-ON users(balance DESC);
-
-
-CREATE INDEX IF NOT EXISTS idx_users_referrer
-ON users(referred_by);
-
-
-CREATE INDEX IF NOT EXISTS idx_users_created
-ON users(created_at);
-
-
--- ==========================================================
--- TRANSACTIONS
--- ==========================================================
 
 CREATE TABLE IF NOT EXISTS transactions (
     id BIGSERIAL PRIMARY KEY,
@@ -81,7 +86,6 @@ CREATE TABLE IF NOT EXISTS transactions (
     amount BIGINT NOT NULL,
 
     balance_before BIGINT,
-
     balance_after BIGINT,
 
     reason TEXT NOT NULL,
@@ -92,38 +96,23 @@ CREATE TABLE IF NOT EXISTS transactions (
 );
 
 
-CREATE INDEX IF NOT EXISTS idx_transactions_user
-ON transactions(user_id, created_at DESC);
-
-
--- ==========================================================
--- GAMES
--- ==========================================================
-
 CREATE TABLE IF NOT EXISTS games (
     id SERIAL PRIMARY KEY,
 
     code TEXT UNIQUE NOT NULL,
-
     title TEXT NOT NULL,
 
-    description TEXT,
-
-    emoji TEXT,
+    description TEXT DEFAULT '',
+    emoji TEXT DEFAULT '🎮',
 
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
 
     min_bet BIGINT NOT NULL DEFAULT 10,
-
     max_bet BIGINT NOT NULL DEFAULT 100000,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-
--- ==========================================================
--- GAME HISTORY
--- ==========================================================
 
 CREATE TABLE IF NOT EXISTS game_history (
     id BIGSERIAL PRIMARY KEY,
@@ -135,9 +124,7 @@ CREATE TABLE IF NOT EXISTS game_history (
     game_code TEXT NOT NULL,
 
     bet BIGINT NOT NULL DEFAULT 0,
-
     win BIGINT NOT NULL DEFAULT 0,
-
     profit BIGINT NOT NULL DEFAULT 0,
 
     multiplier NUMERIC(12,4),
@@ -147,18 +134,6 @@ CREATE TABLE IF NOT EXISTS game_history (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-
-CREATE INDEX IF NOT EXISTS idx_game_history_user
-ON game_history(user_id, created_at DESC);
-
-
-CREATE INDEX IF NOT EXISTS idx_game_history_game
-ON game_history(game_code);
-
-
--- ==========================================================
--- PVP MATCHES
--- ==========================================================
 
 CREATE TABLE IF NOT EXISTS pvp_matches (
     id BIGSERIAL PRIMARY KEY,
@@ -173,8 +148,7 @@ CREATE TABLE IF NOT EXISTS pvp_matches (
 
     game_code TEXT NOT NULL DEFAULT 'dice',
 
-    stake BIGINT NOT NULL,
-
+    stake BIGINT NOT NULL DEFAULT 0,
     prize BIGINT NOT NULL DEFAULT 0,
 
     status TEXT NOT NULL DEFAULT 'open',
@@ -191,28 +165,10 @@ CREATE TABLE IF NOT EXISTS pvp_matches (
         ON DELETE SET NULL,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
     started_at TIMESTAMPTZ,
-
     finished_at TIMESTAMPTZ
 );
 
-
-CREATE INDEX IF NOT EXISTS idx_pvp_status
-ON pvp_matches(status);
-
-
-CREATE INDEX IF NOT EXISTS idx_pvp_creator
-ON pvp_matches(creator_id);
-
-
-CREATE INDEX IF NOT EXISTS idx_pvp_opponent
-ON pvp_matches(opponent_id);
-
-
--- ==========================================================
--- PVE BATTLES
--- ==========================================================
 
 CREATE TABLE IF NOT EXISTS pve_battles (
     id BIGSERIAL PRIMARY KEY,
@@ -224,42 +180,28 @@ CREATE TABLE IF NOT EXISTS pve_battles (
     difficulty TEXT NOT NULL DEFAULT 'easy',
 
     entry_fee BIGINT NOT NULL DEFAULT 0,
-
     reward BIGINT NOT NULL DEFAULT 0,
 
     player_score INTEGER,
-
     enemy_score INTEGER,
 
     result TEXT,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
     finished_at TIMESTAMPTZ
 );
 
-
-CREATE INDEX IF NOT EXISTS idx_pve_user
-ON pve_battles(user_id, created_at DESC);
-
-
--- ==========================================================
--- MISSIONS
--- ==========================================================
 
 CREATE TABLE IF NOT EXISTS missions (
     id SERIAL PRIMARY KEY,
 
     title TEXT NOT NULL,
-
-    description TEXT,
+    description TEXT DEFAULT '',
 
     kind TEXT NOT NULL,
-
-    target TEXT,
+    target TEXT DEFAULT '',
 
     target_value BIGINT NOT NULL DEFAULT 1,
-
     reward BIGINT NOT NULL DEFAULT 0,
 
     active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -269,14 +211,6 @@ CREATE TABLE IF NOT EXISTS missions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-
-CREATE INDEX IF NOT EXISTS idx_missions_active
-ON missions(active);
-
-
--- ==========================================================
--- USER MISSION PROGRESS
--- ==========================================================
 
 CREATE TABLE IF NOT EXISTS mission_progress (
     user_id BIGINT NOT NULL
@@ -290,7 +224,6 @@ CREATE TABLE IF NOT EXISTS mission_progress (
     progress BIGINT NOT NULL DEFAULT 0,
 
     completed BOOLEAN NOT NULL DEFAULT FALSE,
-
     claimed BOOLEAN NOT NULL DEFAULT FALSE,
 
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -298,10 +231,6 @@ CREATE TABLE IF NOT EXISTS mission_progress (
     PRIMARY KEY(user_id, mission_id)
 );
 
-
--- ==========================================================
--- REFERRALS
--- ==========================================================
 
 CREATE TABLE IF NOT EXISTS referrals (
     id BIGSERIAL PRIMARY KEY,
@@ -319,18 +248,9 @@ CREATE TABLE IF NOT EXISTS referrals (
     rewarded BOOLEAN NOT NULL DEFAULT FALSE,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
     rewarded_at TIMESTAMPTZ
 );
 
-
-CREATE INDEX IF NOT EXISTS idx_referrals_referrer
-ON referrals(referrer_id);
-
-
--- ==========================================================
--- DAILY BONUSES
--- ==========================================================
 
 CREATE TABLE IF NOT EXISTS daily_bonus_claims (
     id BIGSERIAL PRIMARY KEY,
@@ -342,7 +262,6 @@ CREATE TABLE IF NOT EXISTS daily_bonus_claims (
     day DATE NOT NULL,
 
     reward BIGINT NOT NULL,
-
     streak INTEGER NOT NULL DEFAULT 1,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -351,18 +270,13 @@ CREATE TABLE IF NOT EXISTS daily_bonus_claims (
 );
 
 
--- ==========================================================
--- ACHIEVEMENTS
--- ==========================================================
-
 CREATE TABLE IF NOT EXISTS achievements (
     id SERIAL PRIMARY KEY,
 
     code TEXT UNIQUE NOT NULL,
 
     title TEXT NOT NULL,
-
-    description TEXT,
+    description TEXT DEFAULT '',
 
     reward BIGINT NOT NULL DEFAULT 0
 );
@@ -383,17 +297,12 @@ CREATE TABLE IF NOT EXISTS user_achievements (
 );
 
 
--- ==========================================================
--- PROMO CODES
--- ==========================================================
-
 CREATE TABLE IF NOT EXISTS promo_codes (
     code TEXT PRIMARY KEY,
 
     reward BIGINT NOT NULL,
 
     max_uses INTEGER NOT NULL DEFAULT 1,
-
     uses INTEGER NOT NULL DEFAULT 0,
 
     active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -421,18 +330,13 @@ CREATE TABLE IF NOT EXISTS promo_claims (
 );
 
 
--- ==========================================================
--- SHOP
--- ==========================================================
-
 CREATE TABLE IF NOT EXISTS shop_items (
     id SERIAL PRIMARY KEY,
 
     code TEXT UNIQUE NOT NULL,
 
     title TEXT NOT NULL,
-
-    description TEXT,
+    description TEXT DEFAULT '',
 
     price BIGINT NOT NULL,
 
@@ -445,10 +349,6 @@ CREATE TABLE IF NOT EXISTS shop_items (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-
--- ==========================================================
--- INVENTORY
--- ==========================================================
 
 CREATE TABLE IF NOT EXISTS inventory (
     user_id BIGINT NOT NULL
@@ -467,18 +367,13 @@ CREATE TABLE IF NOT EXISTS inventory (
 );
 
 
--- ==========================================================
--- CLANS
--- ==========================================================
-
 CREATE TABLE IF NOT EXISTS clans (
     id SERIAL PRIMARY KEY,
 
     name TEXT UNIQUE NOT NULL,
-
     tag TEXT UNIQUE,
 
-    description TEXT,
+    description TEXT DEFAULT '',
 
     owner_id BIGINT
         REFERENCES users(id)
@@ -487,7 +382,6 @@ CREATE TABLE IF NOT EXISTS clans (
     treasury BIGINT NOT NULL DEFAULT 0,
 
     level INTEGER NOT NULL DEFAULT 1,
-
     xp BIGINT NOT NULL DEFAULT 0,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -511,21 +405,15 @@ CREATE TABLE IF NOT EXISTS clan_members (
 );
 
 
--- ==========================================================
--- TOURNAMENTS
--- ==========================================================
-
 CREATE TABLE IF NOT EXISTS tournaments (
     id SERIAL PRIMARY KEY,
 
     title TEXT NOT NULL,
-
-    description TEXT,
+    description TEXT DEFAULT '',
 
     game_code TEXT NOT NULL,
 
     entry_fee BIGINT NOT NULL DEFAULT 0,
-
     prize_pool BIGINT NOT NULL DEFAULT 0,
 
     max_players INTEGER NOT NULL DEFAULT 32,
@@ -533,7 +421,6 @@ CREATE TABLE IF NOT EXISTS tournaments (
     status TEXT NOT NULL DEFAULT 'open',
 
     starts_at TIMESTAMPTZ,
-
     ends_at TIMESTAMPTZ,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -559,10 +446,6 @@ CREATE TABLE IF NOT EXISTS tournament_players (
 );
 
 
--- ==========================================================
--- ADMIN ACTION LOG
--- ==========================================================
-
 CREATE TABLE IF NOT EXISTS admin_logs (
     id BIGSERIAL PRIMARY KEY,
 
@@ -579,10 +462,6 @@ CREATE TABLE IF NOT EXISTS admin_logs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-
--- ==========================================================
--- NOTIFICATIONS
--- ==========================================================
 
 CREATE TABLE IF NOT EXISTS notifications (
     id BIGSERIAL PRIMARY KEY,
@@ -601,10 +480,6 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 
 
--- ==========================================================
--- SETTINGS
--- ==========================================================
-
 CREATE TABLE IF NOT EXISTS system_settings (
     key TEXT PRIMARY KEY,
 
@@ -612,88 +487,113 @@ CREATE TABLE IF NOT EXISTS system_settings (
 
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-
 """
 
 
 # ============================================================
-# DEFAULT DATA
+# DEFAULT GAMES
 # ============================================================
 
 DEFAULT_GAMES = [
+    ("dice", "🎲 Dice", "Классическая игра в кости", "🎲"),
+    ("darts", "🎯 Darts", "Попади как можно ближе к центру", "🎯"),
+    ("football", "⚽ Football", "Футбольная игра Telegram", "⚽"),
+    ("basketball", "🏀 Basketball", "Баскетбольная игра Telegram", "🏀"),
+    ("bowling", "🎳 Bowling", "Боулинг", "🎳"),
+    ("slots", "🎰 Slots", "Игровые слоты", "🎰"),
+    ("mines", "💣 Mines", "Поле 5×5 с минами", "💣"),
+    ("crash", "📈 Crash", "Забери выигрыш до краша", "📈"),
+    ("roulette", "🎡 Roulette", "Рулетка Fenix Coin", "🎡"),
+    ("coinflip", "🪙 Coin Flip", "Орёл или решка", "🪙"),
+    ("blackjack", "🃏 Blackjack", "Карточная игра", "🃏"),
+    ("reaction", "⚡ Reaction", "Проверь скорость реакции", "⚡"),
+    ("race", "🏁 Race", "Гоночная игра", "🏁"),
+]
 
+
+# ============================================================
+# DEFAULT SHOP
+# ============================================================
+
+DEFAULT_SHOP = [
     (
-        "dice",
-        "🎲 Dice",
-        "Классическая игра в кости",
-        "🎲",
+        "vip",
+        "👑 VIP",
+        "VIP-статус игрока",
+        50000,
+        "vip",
+        {"days": 30},
     ),
-
     (
-        "darts",
-        "🎯 Darts",
-        "Попади как можно ближе к центру",
-        "🎯",
+        "profile_red",
+        "🔴 Red Profile",
+        "Красное оформление профиля",
+        10000,
+        "profile_theme",
+        {"theme": "red"},
     ),
-
     (
-        "football",
-        "⚽ Football",
-        "Telegram Football",
-        "⚽",
+        "profile_gold",
+        "🟡 Gold Profile",
+        "Золотое оформление профиля",
+        25000,
+        "profile_theme",
+        {"theme": "gold"},
     ),
-
     (
-        "basketball",
-        "🏀 Basketball",
-        "Telegram Basketball",
-        "🏀",
-    ),
-
-    (
-        "bowling",
-        "🎳 Bowling",
-        "Telegram Bowling",
-        "🎳",
-    ),
-
-    (
-        "slots",
-        "🎰 Slots",
-        "Игровые слоты",
-        "🎰",
-    ),
-
-    (
-        "mines",
-        "💣 Mines",
-        "Поле 5×5 с минами",
-        "💣",
-    ),
-
-    (
-        "crash",
-        "📈 Crash",
-        "Забери выигрыш до краша",
-        "📈",
-    ),
-
-    (
-        "roulette",
-        "🎡 Roulette",
-        "Рулетка Fenix Coin",
-        "🎡",
+        "title_pro",
+        "⚡ PRO",
+        "Титул PRO",
+        15000,
+        "title",
+        {"title": "PRO"},
     ),
 ]
 
 
 # ============================================================
-# INIT
+# DEFAULT ACHIEVEMENTS
+# ============================================================
+
+DEFAULT_ACHIEVEMENTS = [
+    (
+        "first_game",
+        "🎮 Первая игра",
+        "Сыграть первую игру",
+        100,
+    ),
+    (
+        "ten_games",
+        "🔥 10 игр",
+        "Сыграть 10 игр",
+        500,
+    ),
+    (
+        "hundred_games",
+        "💎 100 игр",
+        "Сыграть 100 игр",
+        2500,
+    ),
+    (
+        "first_win",
+        "🏆 Первая победа",
+        "Выиграть первую игру",
+        250,
+    ),
+    (
+        "referral",
+        "👥 Рефер",
+        "Пригласить первого игрока",
+        500,
+    ),
+]
+
+
+# ============================================================
+# INIT DATABASE
 # ============================================================
 
 async def init_db():
-
     global pool
 
     if not settings.database_url:
@@ -710,104 +610,247 @@ async def init_db():
 
     async with pool.acquire() as conn:
 
+        # Основная схема
         await conn.execute(SCHEMA)
 
-        # Safe migrations for databases created by older builds
-        await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS description TEXT")
-        await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS emoji TEXT")
-        await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE")
-        await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS min_bet BIGINT NOT NULL DEFAULT 10")
-        await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS max_bet BIGINT NOT NULL DEFAULT 100000")
-        await conn.execute("ALTER TABLE game_history ADD COLUMN IF NOT EXISTS multiplier NUMERIC(12,4)")
-        await conn.execute("ALTER TABLE game_history ADD COLUMN IF NOT EXISTS result JSONB NOT NULL DEFAULT '{}'")
+        # ====================================================
+        # SAFE MIGRATIONS
+        # ====================================================
 
-        # ----------------------------------------------------
-        # Default games
-        # ----------------------------------------------------
+        migrations = [
+            # USERS
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS balance BIGINT NOT NULL DEFAULT 1000",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS xp BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS level INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS games BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS wins BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS losses BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS referrals INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_rewarded BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS admin BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS streak INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_claimed_at TIMESTAMPTZ",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+
+            # GAMES
+            "ALTER TABLE games ADD COLUMN IF NOT EXISTS code TEXT",
+            "ALTER TABLE games ADD COLUMN IF NOT EXISTS title TEXT",
+            "ALTER TABLE games ADD COLUMN IF NOT EXISTS description TEXT DEFAULT ''",
+            "ALTER TABLE games ADD COLUMN IF NOT EXISTS emoji TEXT DEFAULT '🎮'",
+            "ALTER TABLE games ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE",
+            "ALTER TABLE games ADD COLUMN IF NOT EXISTS min_bet BIGINT NOT NULL DEFAULT 10",
+            "ALTER TABLE games ADD COLUMN IF NOT EXISTS max_bet BIGINT NOT NULL DEFAULT 100000",
+            "ALTER TABLE games ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+
+            # HISTORY
+            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS game_code TEXT",
+            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS bet BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS win BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS profit BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS multiplier NUMERIC(12,4)",
+            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS result JSONB NOT NULL DEFAULT '{}'",
+            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+
+            # TRANSACTIONS
+            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS amount BIGINT NOT NULL DEFAULT 0",
+            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS balance_before BIGINT",
+            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS balance_after BIGINT",
+            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT 'unknown'",
+            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'",
+            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+        ]
+
+        for query in migrations:
+            try:
+                await conn.execute(query)
+            except Exception as exc:
+                print(f"[DB MIGRATION WARNING] {exc}")
+
+        # ====================================================
+        # DEFAULT GAMES
+        # ====================================================
 
         for code, title, description, emoji in DEFAULT_GAMES:
 
             await conn.execute(
                 """
-                INSERT INTO games (
+                INSERT INTO games
+                (
                     code,
                     title,
                     description,
                     emoji,
+                    enabled,
                     min_bet,
                     max_bet
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
                     $3,
                     $4,
+                    TRUE,
                     $5,
                     $6
                 )
-
                 ON CONFLICT (code)
-
                 DO UPDATE SET
                     title = EXCLUDED.title,
                     description = EXCLUDED.description,
                     emoji = EXCLUDED.emoji
                 """,
-
                 code,
                 title,
                 description,
                 emoji,
-                settings.min_bet,
-                settings.max_bet,
+                int(getattr(settings, "min_bet", 10)),
+                int(getattr(settings, "max_bet", 100000)),
             )
 
-        # ----------------------------------------------------
-        # System settings
-        # ----------------------------------------------------
+        # ====================================================
+        # SHOP
+        # ====================================================
+
+        for (
+            code,
+            title,
+            description,
+            price,
+            kind,
+            data,
+        ) in DEFAULT_SHOP:
+
+            await conn.execute(
+                """
+                INSERT INTO shop_items
+                (
+                    code,
+                    title,
+                    description,
+                    price,
+                    kind,
+                    data,
+                    active
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    $6::jsonb,
+                    TRUE
+                )
+                ON CONFLICT (code)
+                DO NOTHING
+                """,
+                code,
+                title,
+                description,
+                price,
+                kind,
+                json_dump(data),
+            )
+
+        # ====================================================
+        # ACHIEVEMENTS
+        # ====================================================
+
+        for (
+            code,
+            title,
+            description,
+            reward,
+        ) in DEFAULT_ACHIEVEMENTS:
+
+            await conn.execute(
+                """
+                INSERT INTO achievements
+                (
+                    code,
+                    title,
+                    description,
+                    reward
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $4
+                )
+                ON CONFLICT (code)
+                DO NOTHING
+                """,
+                code,
+                title,
+                description,
+                reward,
+            )
+
+        # ====================================================
+        # SYSTEM SETTINGS
+        # ====================================================
 
         defaults = {
-
-            "ref_reward":
-                str(settings.ref_reward),
-
-            "start_balance":
-                str(settings.start_balance),
-
-            "min_bet":
-                str(settings.min_bet),
-
-            "max_bet":
-                str(settings.max_bet),
-
-            "house_edge":
-                str(settings.house_edge),
-
+            "ref_reward": str(
+                getattr(settings, "ref_reward", 600)
+            ),
+            "start_balance": str(
+                getattr(settings, "start_balance", 1000)
+            ),
+            "min_bet": str(
+                getattr(settings, "min_bet", 10)
+            ),
+            "max_bet": str(
+                getattr(settings, "max_bet", 100000)
+            ),
+            "house_edge": str(
+                getattr(settings, "house_edge", 0.05)
+            ),
         }
 
         for key, value in defaults.items():
 
             await conn.execute(
                 """
-                INSERT INTO system_settings (
+                INSERT INTO system_settings
+                (
                     key,
                     value
                 )
-
-                VALUES ($1, $2)
-
+                VALUES
+                (
+                    $1,
+                    $2
+                )
                 ON CONFLICT (key)
                 DO NOTHING
                 """,
-
                 key,
                 value,
             )
 
-    print("======================================")
-    print("🔥 FENIX COIN DATABASE READY")
-    print("======================================")
+    print("==========================================")
+    print("🔥 FENIX COIN ULTRA DATABASE READY")
+    print("🎮 GAMES: READY")
+    print("💰 ECONOMY: READY")
+    print("👥 REFERRALS: READY")
+    print("⚔️ PVP: READY")
+    print("🤖 PVE: READY")
+    print("📋 MISSIONS: READY")
+    print("🛒 SHOP: READY")
+    print("🏆 ACHIEVEMENTS: READY")
+    print("==========================================")
 
 
 # ============================================================
@@ -815,28 +858,11 @@ async def init_db():
 # ============================================================
 
 async def close_db():
-
     global pool
 
-    if pool:
-
+    if pool is not None:
         await pool.close()
-
         pool = None
-
-
-# ============================================================
-# CHECK
-# ============================================================
-
-def check_pool():
-
-    if pool is None:
-        raise RuntimeError(
-            "Database pool is not initialized"
-        )
-
-    return pool
 
 
 # ============================================================
@@ -844,7 +870,6 @@ def check_pool():
 # ============================================================
 
 async def get_user(user_id: int):
-
     db = check_pool()
 
     return await db.fetchrow(
@@ -853,7 +878,7 @@ async def get_user(user_id: int):
         FROM users
         WHERE id = $1
         """,
-        user_id,
+        int(user_id),
     )
 
 
@@ -861,8 +886,13 @@ async def ensure_user(
     user,
     ref: Optional[int] = None,
 ):
-
     db = check_pool()
+
+    user_id = int(user.id)
+
+    username = getattr(user, "username", None)
+    first_name = getattr(user, "first_name", "") or ""
+    last_name = getattr(user, "last_name", None)
 
     async with db.acquire() as conn:
 
@@ -875,7 +905,7 @@ async def ensure_user(
                 WHERE id = $1
                 FOR UPDATE
                 """,
-                user.id,
+                user_id,
             )
 
             if existing:
@@ -883,32 +913,33 @@ async def ensure_user(
                 await conn.execute(
                     """
                     UPDATE users
-
                     SET
                         username = $2,
                         first_name = $3,
                         last_name = $4,
                         last_activity_at = NOW(),
                         updated_at = NOW()
-
                     WHERE id = $1
                     """,
-
-                    user.id,
-                    user.username,
-                    user.first_name,
-                    user.last_name,
+                    user_id,
+                    username,
+                    first_name,
+                    last_name,
                 )
 
                 return existing, False
 
-            # нельзя пригласить самого себя
-            if ref == user.id:
+            if ref == user_id:
                 ref = None
+
+            start_balance = int(
+                getattr(settings, "start_balance", 1000)
+            )
 
             row = await conn.fetchrow(
                 """
-                INSERT INTO users (
+                INSERT INTO users
+                (
                     id,
                     username,
                     first_name,
@@ -917,8 +948,8 @@ async def ensure_user(
                     referred_by,
                     last_activity_at
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
                     $3,
@@ -927,30 +958,28 @@ async def ensure_user(
                     $6,
                     NOW()
                 )
-
                 RETURNING *
                 """,
-
-                user.id,
-                user.username,
-                user.first_name,
-                user.last_name,
-                settings.start_balance,
+                user_id,
+                username,
+                first_name,
+                last_name,
+                start_balance,
                 ref,
             )
 
-            # стартовые монеты
             await conn.execute(
                 """
-                INSERT INTO transactions (
+                INSERT INTO transactions
+                (
                     user_id,
                     amount,
                     balance_before,
                     balance_after,
                     reason
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
                     0,
@@ -958,92 +987,78 @@ async def ensure_user(
                     'start_balance'
                 )
                 """,
-
-                user.id,
-                settings.start_balance,
+                user_id,
+                start_balance,
             )
 
-            # ------------------------------------------------
+            # ==================================================
             # REFERRAL
-            # ------------------------------------------------
+            # ==================================================
 
             if ref:
 
-                # проверяем существование пригласившего
                 referrer = await conn.fetchrow(
                     """
-                    SELECT id
+                    SELECT id, balance
                     FROM users
                     WHERE id = $1
                     FOR UPDATE
                     """,
-
-                    ref,
+                    int(ref),
                 )
 
                 if referrer:
 
-                    reward = settings.ref_reward
-
-                    current_balance = await conn.fetchval(
-                        """
-                        SELECT balance
-                        FROM users
-                        WHERE id = $1
-                        """,
-
-                        ref,
+                    reward = int(
+                        getattr(settings, "ref_reward", 600)
                     )
 
-                    new_balance = (
-                        current_balance + reward
-                    )
+                    before = int(referrer["balance"])
+                    after = before + reward
 
                     await conn.execute(
                         """
                         UPDATE users
-
                         SET
                             balance = $2,
-                            referrals = referrals + 1
-
+                            referrals = referrals + 1,
+                            updated_at = NOW()
                         WHERE id = $1
                         """,
-
-                        ref,
-                        new_balance,
+                        int(ref),
+                        after,
                     )
 
                     await conn.execute(
                         """
-                        INSERT INTO referrals (
+                        INSERT INTO referrals
+                        (
                             referrer_id,
                             referred_id,
                             reward,
                             rewarded,
                             rewarded_at
                         )
-
-                        VALUES (
+                        VALUES
+                        (
                             $1,
                             $2,
                             $3,
                             TRUE,
                             NOW()
                         )
-
                         ON CONFLICT (referred_id)
                         DO NOTHING
                         """,
-
-                        ref,
-                        user.id,
+                        int(ref),
+                        user_id,
                         reward,
                     )
 
                     await conn.execute(
                         """
-                        INSERT INTO transactions (
+                        INSERT INTO transactions
+                        (
                             user_id,
                             amount,
                             balance_before,
@@ -1051,8 +1066,8 @@ async def ensure_user(
                             reason,
                             meta
                         )
-
-                        VALUES (
+                        VALUES
+                        (
                             $1,
                             $2,
                             $3,
@@ -1061,13 +1076,12 @@ async def ensure_user(
                             $5::jsonb
                         )
                         """,
-
-                        ref,
+                        int(ref),
                         reward,
-                        current_balance,
-                        new_balance,
-                        json.dumps({
-                            "referred_user": user.id
+                        before,
+                        after,
+                        json_dump({
+                            "referred_user": user_id
                         }),
                     )
 
@@ -1087,63 +1101,53 @@ async def change_balance(
 
     db = check_pool()
 
+    amount = int(amount)
+
     async with db.acquire() as conn:
 
         async with conn.transaction():
 
-            row = await conn.fetchrow(
+            user = await conn.fetchrow(
                 """
                 SELECT
+                    id,
                     balance,
                     banned
-
                 FROM users
-
                 WHERE id = $1
-
                 FOR UPDATE
                 """,
-
-                user_id,
+                int(user_id),
             )
 
-            if not row:
-                raise ValueError(
-                    "user_not_found"
-                )
+            if not user:
+                raise ValueError("user_not_found")
 
-            if row["banned"]:
-                raise ValueError(
-                    "user_banned"
-                )
+            if user["banned"]:
+                raise ValueError("user_banned")
 
-            before = row["balance"]
-
+            before = int(user["balance"])
             after = before + amount
 
             if after < 0:
-                raise ValueError(
-                    "insufficient_funds"
-                )
+                raise ValueError("insufficient_funds")
 
             await conn.execute(
                 """
                 UPDATE users
-
                 SET
                     balance = $2,
                     updated_at = NOW()
-
                 WHERE id = $1
                 """,
-
-                user_id,
+                int(user_id),
                 after,
             )
 
             await conn.execute(
                 """
-                INSERT INTO transactions (
+                INSERT INTO transactions
+                (
                     user_id,
                     amount,
                     balance_before,
@@ -1151,8 +1155,8 @@ async def change_balance(
                     reason,
                     meta
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
                     $3,
@@ -1161,15 +1165,12 @@ async def change_balance(
                     $6::jsonb
                 )
                 """,
-
-                user_id,
+                int(user_id),
                 amount,
                 before,
                 after,
-                reason,
-                json.dumps(
-                    meta or {}
-                ),
+                str(reason),
+                json_dump(meta),
             )
 
             return after
@@ -1181,7 +1182,6 @@ async def balance(
     reason: str,
     meta: Optional[dict] = None,
 ):
-
     return await change_balance(
         user_id,
         delta,
@@ -1191,7 +1191,7 @@ async def balance(
 
 
 # ============================================================
-# XP / LEVEL
+# XP
 # ============================================================
 
 async def add_xp(
@@ -1203,53 +1203,49 @@ async def add_xp(
 
     async with db.acquire() as conn:
 
-        row = await conn.fetchrow(
-            """
-            SELECT xp, level
-            FROM users
-            WHERE id = $1
-            FOR UPDATE
-            """,
+        async with conn.transaction():
 
-            user_id,
-        )
-
-        if not row:
-            raise ValueError(
-                "user_not_found"
+            row = await conn.fetchrow(
+                """
+                SELECT xp, level
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                int(user_id),
             )
 
-        new_xp = row["xp"] + amount
+            if not row:
+                raise ValueError("user_not_found")
 
-        new_level = (
-            new_xp // 100
-        ) + 1
+            new_xp = max(
+                0,
+                int(row["xp"]) + int(amount),
+            )
 
-        await conn.execute(
-            """
-            UPDATE users
+            new_level = (new_xp // 100) + 1
 
-            SET
-                xp = $2,
-                level = $3,
-                updated_at = NOW()
+            await conn.execute(
+                """
+                UPDATE users
+                SET
+                    xp = $2,
+                    level = $3,
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                int(user_id),
+                new_xp,
+                new_level,
+            )
 
-            WHERE id = $1
-            """,
-
-            user_id,
-            new_xp,
-            new_level,
-        )
-
-        return new_xp, new_level
+            return new_xp, new_level
 
 
 async def xp(
     user_id: int,
     amount: int,
 ):
-
     return await add_xp(
         user_id,
         amount,
@@ -1269,9 +1265,12 @@ async def record_game(
     result_data: Optional[dict] = None,
 ):
 
-    profit = win - bet
-
     db = check_pool()
+
+    bet = int(bet)
+    win = int(win)
+
+    profit = win - bet
 
     async with db.acquire() as conn:
 
@@ -1280,24 +1279,23 @@ async def record_game(
             await conn.execute(
                 """
                 UPDATE users
-
                 SET
                     games = games + 1,
                     wins = wins + $2,
                     losses = losses + $3,
+                    last_activity_at = NOW(),
                     updated_at = NOW()
-
                 WHERE id = $1
                 """,
-
-                user_id,
+                int(user_id),
                 1 if profit > 0 else 0,
                 1 if profit <= 0 else 0,
             )
 
             await conn.execute(
                 """
-                INSERT INTO game_history (
+                INSERT INTO game_history
+                (
                     user_id,
                     game_code,
                     bet,
@@ -1306,8 +1304,8 @@ async def record_game(
                     multiplier,
                     result
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
                     $3,
@@ -1317,16 +1315,13 @@ async def record_game(
                     $7::jsonb
                 )
                 """,
-
-                user_id,
-                game_code,
+                int(user_id),
+                str(game_code),
                 bet,
                 win,
                 profit,
                 multiplier,
-                json.dumps(
-                    result_data or {}
-                ),
+                json_dump(result_data),
             )
 
 
@@ -1340,20 +1335,188 @@ async def result(
     await db.execute(
         """
         UPDATE users
-
         SET
             games = games + 1,
             wins = wins + $2,
             losses = losses + $3,
             updated_at = NOW()
-
         WHERE id = $1
         """,
-
-        user_id,
+        int(user_id),
         1 if win else 0,
         0 if win else 1,
     )
+
+
+# ============================================================
+# PLAY GAME
+# ============================================================
+
+async def play_game(
+    user_id: int,
+    game_code: str,
+    bet: int,
+    win: int,
+    multiplier: Optional[float] = None,
+    result_data: Optional[dict] = None,
+):
+
+    bet = int(bet)
+    win = int(win)
+
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
+
+    if win < 0:
+        raise ValueError("Некорректный результат")
+
+    db = check_pool()
+
+    async with db.acquire() as conn:
+
+        async with conn.transaction():
+
+            user = await conn.fetchrow(
+                """
+                SELECT
+                    id,
+                    balance,
+                    banned
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                int(user_id),
+            )
+
+            if not user:
+                raise ValueError("Пользователь не найден")
+
+            if user["banned"]:
+                raise ValueError("Пользователь заблокирован")
+
+            before = int(user["balance"])
+
+            if before < bet:
+                raise ValueError(
+                    "Недостаточно Fenix Coin"
+                )
+
+            profit = win - bet
+
+            after = before + profit
+
+            await conn.execute(
+                """
+                UPDATE users
+                SET
+                    balance = $2,
+                    games = games + 1,
+                    wins = wins + $3,
+                    losses = losses + $4,
+                    last_activity_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                int(user_id),
+                after,
+                1 if profit > 0 else 0,
+                1 if profit <= 0 else 0,
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO game_history
+                (
+                    user_id,
+                    game_code,
+                    bet,
+                    win,
+                    profit,
+                    multiplier,
+                    result
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    $6,
+                    $7::jsonb
+                )
+                """,
+                int(user_id),
+                str(game_code),
+                bet,
+                win,
+                profit,
+                multiplier,
+                json_dump(result_data),
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO transactions
+                (
+                    user_id,
+                    amount,
+                    balance_before,
+                    balance_after,
+                    reason,
+                    meta
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    $6::jsonb
+                )
+                """,
+                int(user_id),
+                profit,
+                before,
+                after,
+                f"game:{game_code}",
+                json_dump({
+                    "game": game_code,
+                    "bet": bet,
+                    "win": win,
+                    "multiplier": multiplier,
+                }),
+            )
+
+            # XP
+            xp_gain = max(
+                1,
+                min(50, bet // 10),
+            )
+
+            await conn.execute(
+                """
+                UPDATE users
+                SET
+                    xp = xp + $2,
+                    level = ((xp + $2) / 100) + 1
+                WHERE id = $1
+                """,
+                int(user_id),
+                xp_gain,
+            )
+
+            return {
+                "win": profit > 0,
+                "bet": bet,
+                "win_amount": win,
+                "profit": profit,
+                "multiplier": multiplier,
+                "balance": after,
+                "game": str(game_code),
+            }
 
 
 # ============================================================
@@ -1367,6 +1530,11 @@ async def get_game_history(
 
     db = check_pool()
 
+    limit = max(
+        1,
+        min(int(limit), 200),
+    )
+
     return await db.fetch(
         """
         SELECT *
@@ -1375,8 +1543,7 @@ async def get_game_history(
         ORDER BY created_at DESC
         LIMIT $2
         """,
-
-        user_id,
+        int(user_id),
         limit,
     )
 
@@ -1392,6 +1559,11 @@ async def get_transactions(
 
     db = check_pool()
 
+    limit = max(
+        1,
+        min(int(limit), 200),
+    )
+
     return await db.fetch(
         """
         SELECT *
@@ -1400,8 +1572,7 @@ async def get_transactions(
         ORDER BY created_at DESC
         LIMIT $2
         """,
-
-        user_id,
+        int(user_id),
         limit,
     )
 
@@ -1422,18 +1593,13 @@ async def get_referrals(
             r.*,
             u.username,
             u.first_name
-
         FROM referrals r
-
-        JOIN users u
+        LEFT JOIN users u
             ON u.id = r.referred_id
-
         WHERE r.referrer_id = $1
-
         ORDER BY r.created_at DESC
         """,
-
-        user_id,
+        int(user_id),
     )
 
 
@@ -1449,8 +1615,7 @@ async def referral_count(
         FROM referrals
         WHERE referrer_id = $1
         """,
-
-        user_id,
+        int(user_id),
     )
 
 
@@ -1472,7 +1637,8 @@ async def create_mission(
 
     return await db.fetchrow(
         """
-        INSERT INTO missions (
+        INSERT INTO missions
+        (
             title,
             description,
             kind,
@@ -1481,8 +1647,8 @@ async def create_mission(
             reward,
             created_by
         )
-
-        VALUES (
+        VALUES
+        (
             $1,
             $2,
             $3,
@@ -1491,16 +1657,14 @@ async def create_mission(
             $6,
             $7
         )
-
         RETURNING *
         """,
-
         title,
         description,
         kind,
         target,
-        target_value,
-        reward,
+        int(target_value),
+        int(reward),
         created_by,
     )
 
@@ -1511,11 +1675,50 @@ async def get_active_missions():
 
     return await db.fetch(
         """
-        SELECT *
-        FROM missions
-        WHERE active = TRUE
-        ORDER BY id DESC
+        SELECT
+            m.*,
+            COALESCE(
+                mp.progress,
+                0
+            ) AS progress,
+            COALESCE(
+                mp.completed,
+                FALSE
+            ) AS completed,
+            COALESCE(
+                mp.claimed,
+                FALSE
+            ) AS claimed
+        FROM missions m
+        LEFT JOIN mission_progress mp
+            ON mp.mission_id = m.id
+        WHERE m.active = TRUE
+        ORDER BY m.id DESC
         """
+    )
+
+
+async def get_user_missions(
+    user_id: int,
+):
+
+    db = check_pool()
+
+    return await db.fetch(
+        """
+        SELECT
+            m.*,
+            COALESCE(mp.progress, 0) AS progress,
+            COALESCE(mp.completed, FALSE) AS completed,
+            COALESCE(mp.claimed, FALSE) AS claimed
+        FROM missions m
+        LEFT JOIN mission_progress mp
+            ON mp.mission_id = m.id
+            AND mp.user_id = $1
+        WHERE m.active = TRUE
+        ORDER BY m.id DESC
+        """,
+        int(user_id),
     )
 
 
@@ -1538,77 +1741,72 @@ async def update_mission_progress(
                 WHERE id = $1
                   AND active = TRUE
                 """,
-
-                mission_id,
+                int(mission_id),
             )
 
             if not mission:
                 return None
 
-            await conn.execute(
+            row = await conn.fetchrow(
                 """
-                INSERT INTO mission_progress (
+                INSERT INTO mission_progress
+                (
                     user_id,
                     mission_id,
                     progress
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
                     $3
                 )
-
-                ON CONFLICT (
+                ON CONFLICT
+                (
                     user_id,
                     mission_id
                 )
-
                 DO UPDATE SET
                     progress =
                         mission_progress.progress
                         + EXCLUDED.progress,
-
                     updated_at = NOW()
+                RETURNING *
                 """,
-
-                user_id,
-                mission_id,
-                amount,
+                int(user_id),
+                int(mission_id),
+                int(amount),
             )
 
-            progress = await conn.fetchrow(
+            completed = (
+                int(row["progress"])
+                >= int(mission["target_value"])
+            )
+
+            if completed:
+
+                await conn.execute(
+                    """
+                    UPDATE mission_progress
+                    SET completed = TRUE,
+                        updated_at = NOW()
+                    WHERE user_id = $1
+                      AND mission_id = $2
+                    """,
+                    int(user_id),
+                    int(mission_id),
+                )
+
+            return await conn.fetchrow(
                 """
                 SELECT *
                 FROM mission_progress
                 WHERE user_id = $1
                   AND mission_id = $2
                 """,
-
-                user_id,
-                mission_id,
+                int(user_id),
+                int(mission_id),
             )
-
-            if (
-                progress["progress"]
-                >= mission["target_value"]
-            ):
-
-                await conn.execute(
-                    """
-                    UPDATE mission_progress
-
-                    SET completed = TRUE
-
-                    WHERE user_id = $1
-                      AND mission_id = $2
-                    """,
-
-                    user_id,
-                    mission_id,
-                )
-
-            return progress
 
 
 async def claim_mission(
@@ -1627,20 +1825,15 @@ async def claim_mission(
                 SELECT
                     mp.*,
                     m.reward
-
                 FROM mission_progress mp
-
                 JOIN missions m
                     ON m.id = mp.mission_id
-
                 WHERE mp.user_id = $1
                   AND mp.mission_id = $2
-
                 FOR UPDATE
                 """,
-
-                user_id,
-                mission_id,
+                int(user_id),
+                int(mission_id),
             )
 
             if not row:
@@ -1658,52 +1851,67 @@ async def claim_mission(
                     "mission_already_claimed"
                 )
 
+            reward = int(row["reward"])
+
+            user = await conn.fetchrow(
+                """
+                SELECT balance
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                int(user_id),
+            )
+
+            before = int(user["balance"])
+            after = before + reward
+
             await conn.execute(
                 """
                 UPDATE mission_progress
-
                 SET claimed = TRUE
-
                 WHERE user_id = $1
                   AND mission_id = $2
                 """,
-
-                user_id,
-                mission_id,
+                int(user_id),
+                int(mission_id),
             )
-
-            reward = row["reward"]
 
             await conn.execute(
                 """
                 UPDATE users
-
-                SET balance = balance + $2
-
+                SET
+                    balance = $2,
+                    updated_at = NOW()
                 WHERE id = $1
                 """,
-
-                user_id,
-                reward,
+                int(user_id),
+                after,
             )
 
             await conn.execute(
                 """
-                INSERT INTO transactions (
+                INSERT INTO transactions
+                (
                     user_id,
                     amount,
+                    balance_before,
+                    balance_after,
                     reason
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
+                    $3,
+                    $4,
                     'mission_reward'
                 )
                 """,
-
-                user_id,
+                int(user_id),
                 reward,
+                before,
+                after,
             )
 
             return reward
@@ -1720,6 +1928,8 @@ async def claim_daily_bonus(
 
     db = check_pool()
 
+    reward = int(reward)
+
     async with db.acquire() as conn:
 
         async with conn.transaction():
@@ -1732,19 +1942,15 @@ async def claim_daily_bonus(
                 """
                 SELECT *
                 FROM daily_bonus_claims
-
                 WHERE user_id = $1
                   AND day = $2
-
                 FOR UPDATE
                 """,
-
-                user_id,
+                int(user_id),
                 today,
             )
 
             if existing:
-
                 raise ValueError(
                     "already_claimed"
                 )
@@ -1753,15 +1959,11 @@ async def claim_daily_bonus(
                 """
                 SELECT *
                 FROM daily_bonus_claims
-
                 WHERE user_id = $1
-
                 ORDER BY day DESC
-
                 LIMIT 1
                 """,
-
-                user_id,
+                int(user_id),
             )
 
             streak = 1
@@ -1769,33 +1971,50 @@ async def claim_daily_bonus(
             if previous:
 
                 diff = (
-                    today
-                    - previous["day"]
+                    today - previous["day"]
                 ).days
 
                 if diff == 1:
                     streak = (
-                        previous["streak"] + 1
+                        int(previous["streak"]) + 1
                     )
+
+            user = await conn.fetchrow(
+                """
+                SELECT balance
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                int(user_id),
+            )
+
+            if not user:
+                raise ValueError(
+                    "user_not_found"
+                )
+
+            before = int(user["balance"])
+            after = before + reward
 
             await conn.execute(
                 """
-                INSERT INTO daily_bonus_claims (
+                INSERT INTO daily_bonus_claims
+                (
                     user_id,
                     day,
                     reward,
                     streak
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
                     $3,
                     $4
                 )
                 """,
-
-                user_id,
+                int(user_id),
                 today,
                 reward,
                 streak,
@@ -1804,37 +2023,41 @@ async def claim_daily_bonus(
             await conn.execute(
                 """
                 UPDATE users
-
                 SET
-                    balance = balance + $2,
+                    balance = $2,
                     streak = $3,
-                    daily_claimed_at = NOW()
-
+                    daily_claimed_at = NOW(),
+                    updated_at = NOW()
                 WHERE id = $1
                 """,
-
-                user_id,
-                reward,
+                int(user_id),
+                after,
                 streak,
             )
 
             await conn.execute(
                 """
-                INSERT INTO transactions (
+                INSERT INTO transactions
+                (
                     user_id,
                     amount,
+                    balance_before,
+                    balance_after,
                     reason
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
+                    $3,
+                    $4,
                     'daily_bonus'
                 )
                 """,
-
-                user_id,
+                int(user_id),
                 reward,
+                before,
+                after,
             )
 
             return reward, streak
@@ -1850,43 +2073,153 @@ async def create_pvp(
     game_code: str = "dice",
 ):
 
-    # блокируем деньги
-    await change_balance(
-        creator_id,
-        -stake,
-        "pvp_lock",
-        {
-            "game": game_code
-        },
+    stake = int(stake)
+
+    if stake <= 0:
+        raise ValueError("invalid_stake")
+
+    db = check_pool()
+
+    async with db.acquire() as conn:
+
+        async with conn.transaction():
+
+            user = await conn.fetchrow(
+                """
+                SELECT balance, banned
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                int(creator_id),
+            )
+
+            if not user:
+                raise ValueError(
+                    "user_not_found"
+                )
+
+            if user["banned"]:
+                raise ValueError(
+                    "user_banned"
+                )
+
+            if int(user["balance"]) < stake:
+                raise ValueError(
+                    "insufficient_funds"
+                )
+
+            before = int(user["balance"])
+            after = before - stake
+
+            await conn.execute(
+                """
+                UPDATE users
+                SET balance = $2
+                WHERE id = $1
+                """,
+                int(creator_id),
+                after,
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO transactions
+                (
+                    user_id,
+                    amount,
+                    balance_before,
+                    balance_after,
+                    reason,
+                    meta
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    'pvp_lock',
+                    $5::jsonb
+                )
+                """,
+                int(creator_id),
+                -stake,
+                before,
+                after,
+                json_dump({
+                    "game": game_code
+                }),
+            )
+
+            return await conn.fetchrow(
+                """
+                INSERT INTO pvp_matches
+                (
+                    creator_id,
+                    game_code,
+                    stake,
+                    prize,
+                    status
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $3,
+                    'open'
+                )
+                RETURNING *
+                """,
+                int(creator_id),
+                str(game_code),
+                stake,
+            )
+
+
+async def get_open_pvp(
+    game_code: Optional[str] = None,
+):
+
+    db = check_pool()
+
+    if game_code:
+
+        return await db.fetch(
+            """
+            SELECT *
+            FROM pvp_matches
+            WHERE status = 'open'
+              AND game_code = $1
+            ORDER BY created_at DESC
+            """,
+            str(game_code),
+        )
+
+    return await db.fetch(
+        """
+        SELECT *
+        FROM pvp_matches
+        WHERE status = 'open'
+        ORDER BY created_at DESC
+        """
     )
+
+
+async def get_pvp(
+    match_id: int,
+):
 
     db = check_pool()
 
     return await db.fetchrow(
         """
-        INSERT INTO pvp_matches (
-            creator_id,
-            game_code,
-            stake,
-            prize,
-            status
-        )
-
-        VALUES (
-            $1,
-            $2,
-            $3,
-            $4,
-            'open'
-        )
-
-        RETURNING *
+        SELECT *
+        FROM pvp_matches
+        WHERE id = $1
         """,
-
-        creator_id,
-        game_code,
-        stake,
-        stake,
+        int(match_id),
     )
 
 
@@ -1905,14 +2238,11 @@ async def join_pvp(
                 """
                 SELECT *
                 FROM pvp_matches
-
                 WHERE id = $1
                   AND status = 'open'
-
                 FOR UPDATE
                 """,
-
-                match_id,
+                int(match_id),
             )
 
             if not match:
@@ -1920,54 +2250,92 @@ async def join_pvp(
                     "match_not_found"
                 )
 
-            if (
-                match["creator_id"]
-                == opponent_id
-            ):
+            if int(match["creator_id"]) == int(opponent_id):
                 raise ValueError(
                     "self_join"
                 )
 
-            stake = match["stake"]
+            stake = int(match["stake"])
 
-            # сначала списываем деньги
-            await change_balance(
-                opponent_id,
+            opponent = await conn.fetchrow(
+                """
+                SELECT balance, banned
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                int(opponent_id),
+            )
+
+            if not opponent:
+                raise ValueError(
+                    "opponent_not_found"
+                )
+
+            if opponent["banned"]:
+                raise ValueError(
+                    "user_banned"
+                )
+
+            if int(opponent["balance"]) < stake:
+                raise ValueError(
+                    "insufficient_funds"
+                )
+
+            before = int(opponent["balance"])
+            after = before - stake
+
+            await conn.execute(
+                """
+                UPDATE users
+                SET balance = $2
+                WHERE id = $1
+                """,
+                int(opponent_id),
+                after,
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO transactions
+                (
+                    user_id,
+                    amount,
+                    balance_before,
+                    balance_after,
+                    reason
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    'pvp_lock'
+                )
+                """,
+                int(opponent_id),
                 -stake,
-                "pvp_lock",
-                {
-                    "match": match_id
-                },
+                before,
+                after,
             )
 
             prize = stake * 2
 
-            await conn.execute(
+            return await conn.fetchrow(
                 """
                 UPDATE pvp_matches
-
                 SET
                     opponent_id = $2,
                     prize = $3,
                     status = 'active',
                     started_at = NOW()
-
                 WHERE id = $1
+                RETURNING *
                 """,
-
-                match_id,
-                opponent_id,
+                int(match_id),
+                int(opponent_id),
                 prize,
-            )
-
-            return await conn.fetchrow(
-                """
-                SELECT *
-                FROM pvp_matches
-                WHERE id = $1
-                """,
-
-                match_id,
             )
 
 
@@ -1989,14 +2357,11 @@ async def finish_pvp(
                 """
                 SELECT *
                 FROM pvp_matches
-
                 WHERE id = $1
                   AND status = 'active'
-
                 FOR UPDATE
                 """,
-
-                match_id,
+                int(match_id),
             )
 
             if not match:
@@ -2004,83 +2369,109 @@ async def finish_pvp(
                     "match_not_active"
                 )
 
-            prize = match["prize"]
+            prize = int(match["prize"])
+
+            winner = await conn.fetchrow(
+                """
+                SELECT balance
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                int(winner_id),
+            )
+
+            if not winner:
+                raise ValueError(
+                    "winner_not_found"
+                )
+
+            before = int(winner["balance"])
+            after = before + prize
 
             await conn.execute(
                 """
-                UPDATE pvp_matches
-
+                UPDATE users
                 SET
-                    creator_score = $2,
-                    opponent_score = $3,
-                    winner_id = $4,
-                    loser_id = $5,
-                    status = 'finished',
-                    finished_at = NOW()
-
+                    balance = $2,
+                    games = games + 1,
+                    wins = wins + 1,
+                    updated_at = NOW()
                 WHERE id = $1
                 """,
-
-                match_id,
-                creator_score,
-                opponent_score,
-                winner_id,
-                loser_id,
+                int(winner_id),
+                after,
             )
 
             await conn.execute(
                 """
                 UPDATE users
-
                 SET
-                    balance = balance + $2,
-                    wins = wins + 1
-
+                    games = games + 1,
+                    losses = losses + 1,
+                    updated_at = NOW()
                 WHERE id = $1
                 """,
-
-                winner_id,
-                prize,
+                int(loser_id),
             )
 
             await conn.execute(
                 """
-                UPDATE users
-
-                SET
-                    losses = losses + 1
-
-                WHERE id = $1
-                """,
-
-                loser_id,
-            )
-
-            await conn.execute(
-                """
-                INSERT INTO transactions (
+                INSERT INTO transactions
+                (
                     user_id,
                     amount,
+                    balance_before,
+                    balance_after,
                     reason,
                     meta
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
+                    $3,
+                    $4,
                     'pvp_win',
-                    $3::jsonb
+                    $5::jsonb
                 )
                 """,
-
-                winner_id,
+                int(winner_id),
                 prize,
-                json.dumps({
+                before,
+                after,
+                json_dump({
                     "match_id": match_id
                 }),
             )
 
-            return prize
+            await conn.execute(
+                """
+                UPDATE pvp_matches
+                SET
+                    status = 'finished',
+                    winner_id = $2,
+                    loser_id = $3,
+                    creator_score = $4,
+                    opponent_score = $5,
+                    finished_at = NOW()
+                WHERE id = $1
+                """,
+                int(match_id),
+                int(winner_id),
+                int(loser_id),
+                int(creator_score),
+                int(opponent_score),
+            )
+
+            return await conn.fetchrow(
+                """
+                SELECT *
+                FROM pvp_matches
+                WHERE id = $1
+                """,
+                int(match_id),
+            )
 
 
 # ============================================================
@@ -2092,6 +2483,11 @@ async def leaderboard(
 ):
 
     db = check_pool()
+
+    limit = max(
+        1,
+        min(int(limit), 100),
+    )
 
     return await db.fetch(
         """
@@ -2106,16 +2502,11 @@ async def leaderboard(
             wins,
             losses,
             referrals
-
         FROM users
-
         WHERE banned = FALSE
-
         ORDER BY balance DESC
-
         LIMIT $1
         """,
-
         limit,
     )
 
@@ -2135,26 +2526,25 @@ async def create_promo(
 
     return await db.fetchrow(
         """
-        INSERT INTO promo_codes (
+        INSERT INTO promo_codes
+        (
             code,
             reward,
             max_uses,
             expires_at
         )
-
-        VALUES (
+        VALUES
+        (
             $1,
             $2,
             $3,
             $4
         )
-
         RETURNING *
         """,
-
-        code.upper(),
-        reward,
-        max_uses,
+        str(code).upper(),
+        int(reward),
+        int(max_uses),
         expires_at,
     )
 
@@ -2166,6 +2556,8 @@ async def claim_promo(
 
     db = check_pool()
 
+    code = str(code).upper()
+
     async with db.acquire() as conn:
 
         async with conn.transaction():
@@ -2174,14 +2566,11 @@ async def claim_promo(
                 """
                 SELECT *
                 FROM promo_codes
-
                 WHERE code = $1
                   AND active = TRUE
-
                 FOR UPDATE
                 """,
-
-                code.upper(),
+                code,
             )
 
             if not promo:
@@ -2189,19 +2578,15 @@ async def claim_promo(
                     "promo_not_found"
                 )
 
-            if promo["expires_at"]:
-
-                now = datetime.now(
-                    timezone.utc
+            if (
+                promo["expires_at"]
+                and promo["expires_at"] < datetime.now(timezone.utc)
+            ):
+                raise ValueError(
+                    "promo_expired"
                 )
 
-                if promo["expires_at"] < now:
-                    raise ValueError(
-                        "promo_expired"
-                    )
-
-            if promo["uses"] >= promo["max_uses"]:
-
+            if int(promo["uses"]) >= int(promo["max_uses"]):
                 raise ValueError(
                     "promo_limit"
                 )
@@ -2210,84 +2595,105 @@ async def claim_promo(
                 """
                 SELECT *
                 FROM promo_claims
-
                 WHERE code = $1
                   AND user_id = $2
                 """,
-
-                code.upper(),
-                user_id,
+                code,
+                int(user_id),
             )
 
             if already:
                 raise ValueError(
-                    "promo_already_used"
+                    "promo_already_claimed"
                 )
 
-            reward = promo["reward"]
+            user = await conn.fetchrow(
+                """
+                SELECT balance
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                int(user_id),
+            )
+
+            if not user:
+                raise ValueError(
+                    "user_not_found"
+                )
+
+            reward = int(promo["reward"])
+
+            before = int(user["balance"])
+            after = before + reward
 
             await conn.execute(
                 """
-                INSERT INTO promo_claims (
+                INSERT INTO promo_claims
+                (
                     code,
                     user_id,
                     reward
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
                     $3
                 )
                 """,
-
-                code.upper(),
-                user_id,
+                code,
+                int(user_id),
                 reward,
             )
 
             await conn.execute(
                 """
                 UPDATE promo_codes
-
                 SET uses = uses + 1
-
                 WHERE code = $1
                 """,
-
-                code.upper(),
+                code,
             )
 
             await conn.execute(
                 """
                 UPDATE users
-
-                SET balance = balance + $2
-
+                SET balance = $2
                 WHERE id = $1
                 """,
-
-                user_id,
-                reward,
+                int(user_id),
+                after,
             )
 
             await conn.execute(
                 """
-                INSERT INTO transactions (
+                INSERT INTO transactions
+                (
                     user_id,
                     amount,
-                    reason
+                    balance_before,
+                    balance_after,
+                    reason,
+                    meta
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
-                    'promo'
+                    $3,
+                    $4,
+                    'promo',
+                    $5::jsonb
                 )
                 """,
-
-                user_id,
+                int(user_id),
                 reward,
+                before,
+                after,
+                json_dump({
+                    "code": code
+                }),
             )
 
             return reward
@@ -2297,18 +2703,41 @@ async def claim_promo(
 # ADMIN
 # ============================================================
 
+async def is_admin(
+    user_id: int,
+):
+
+    db = check_pool()
+
+    return bool(
+        await db.fetchval(
+            """
+            SELECT admin
+            FROM users
+            WHERE id = $1
+            """,
+            int(user_id),
+        )
+    )
+
+
 async def admin_give(
     admin_id: int,
     user_id: int,
     amount: int,
 ):
 
+    if not await is_admin(admin_id):
+        raise ValueError(
+            "admin_required"
+        )
+
     new_balance = await change_balance(
         user_id,
-        amount,
+        int(amount),
         "admin_give",
         {
-            "admin_id": admin_id
+            "admin_id": int(admin_id)
         },
     )
 
@@ -2316,24 +2745,24 @@ async def admin_give(
 
     await db.execute(
         """
-        INSERT INTO admin_logs (
+        INSERT INTO admin_logs
+        (
             admin_id,
             action,
             target_user_id,
             amount
         )
-
-        VALUES (
+        VALUES
+        (
             $1,
             'give',
             $2,
             $3
         )
         """,
-
-        admin_id,
-        user_id,
-        amount,
+        int(admin_id),
+        int(user_id),
+        int(amount),
     )
 
     return new_balance
@@ -2345,12 +2774,17 @@ async def admin_take(
     amount: int,
 ):
 
+    if not await is_admin(admin_id):
+        raise ValueError(
+            "admin_required"
+        )
+
     new_balance = await change_balance(
         user_id,
-        -amount,
+        -abs(int(amount)),
         "admin_take",
         {
-            "admin_id": admin_id
+            "admin_id": int(admin_id)
         },
     )
 
@@ -2358,24 +2792,24 @@ async def admin_take(
 
     await db.execute(
         """
-        INSERT INTO admin_logs (
+        INSERT INTO admin_logs
+        (
             admin_id,
             action,
             target_user_id,
             amount
         )
-
-        VALUES (
+        VALUES
+        (
             $1,
             'take',
             $2,
             $3
         )
         """,
-
-        admin_id,
-        user_id,
-        amount,
+        int(admin_id),
+        int(user_id),
+        int(amount),
     )
 
     return new_balance
@@ -2387,47 +2821,51 @@ async def set_ban(
     banned: bool,
 ):
 
+    if not await is_admin(admin_id):
+        raise ValueError(
+            "admin_required"
+        )
+
     db = check_pool()
 
     await db.execute(
         """
         UPDATE users
-
         SET
             banned = $2,
             updated_at = NOW()
-
         WHERE id = $1
         """,
-
-        user_id,
-        banned,
+        int(user_id),
+        bool(banned),
     )
 
     await db.execute(
         """
-        INSERT INTO admin_logs (
+        INSERT INTO admin_logs
+        (
             admin_id,
             action,
             target_user_id,
             data
         )
-
-        VALUES (
+        VALUES
+        (
             $1,
             $2,
             $3,
             $4::jsonb
         )
         """,
-
-        admin_id,
+        int(admin_id),
         "ban" if banned else "unban",
-        user_id,
-        json.dumps({
-            "banned": banned
+        int(user_id),
+        json_dump({
+            "banned": bool(banned)
         }),
     )
+
+    return True
 
 
 # ============================================================
@@ -2442,9 +2880,7 @@ async def get_shop():
         """
         SELECT *
         FROM shop_items
-
         WHERE active = TRUE
-
         ORDER BY price ASC
         """
     )
@@ -2452,7 +2888,7 @@ async def get_shop():
 
 async def buy_item(
     user_id: int,
-    item_id: int,
+    item_id,
 ):
 
     db = check_pool()
@@ -2461,19 +2897,32 @@ async def buy_item(
 
         async with conn.transaction():
 
-            item = await conn.fetchrow(
-                """
-                SELECT *
-                FROM shop_items
+            # Поддерживаем и ID, и code.
+            if isinstance(item_id, int) or str(item_id).isdigit():
 
-                WHERE id = $1
-                  AND active = TRUE
+                item = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM shop_items
+                    WHERE id = $1
+                      AND active = TRUE
+                    FOR UPDATE
+                    """,
+                    int(item_id),
+                )
 
-                FOR UPDATE
-                """,
+            else:
 
-                item_id,
-            )
+                item = await conn.fetchrow(
+                    """
+                    SELECT *
+                    FROM shop_items
+                    WHERE code = $1
+                      AND active = TRUE
+                    FOR UPDATE
+                    """,
+                    str(item_id),
+                )
 
             if not item:
                 raise ValueError(
@@ -2487,8 +2936,7 @@ async def buy_item(
                 WHERE id = $1
                 FOR UPDATE
                 """,
-
-                user_id,
+                int(user_id),
             )
 
             if not user:
@@ -2496,78 +2944,88 @@ async def buy_item(
                     "user_not_found"
                 )
 
-            if user["balance"] < item["price"]:
+            price = int(item["price"])
+            before = int(user["balance"])
+
+            if before < price:
                 raise ValueError(
                     "insufficient_funds"
                 )
 
+            after = before - price
+
             await conn.execute(
                 """
                 UPDATE users
-
-                SET balance =
-                    balance - $2
-
+                SET balance = $2
                 WHERE id = $1
                 """,
-
-                user_id,
-                item["price"],
+                int(user_id),
+                after,
             )
 
             await conn.execute(
                 """
-                INSERT INTO inventory (
+                INSERT INTO inventory
+                (
                     user_id,
                     item_id,
                     quantity
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
                     1
                 )
-
-                ON CONFLICT (
+                ON CONFLICT
+                (
                     user_id,
                     item_id
                 )
-
                 DO UPDATE SET
                     quantity =
                         inventory.quantity + 1
                 """,
-
-                user_id,
-                item_id,
+                int(user_id),
+                int(item["id"]),
             )
 
             await conn.execute(
                 """
-                INSERT INTO transactions (
+                INSERT INTO transactions
+                (
                     user_id,
                     amount,
+                    balance_before,
+                    balance_after,
                     reason,
                     meta
                 )
-
-                VALUES (
+                VALUES
+                (
                     $1,
                     $2,
+                    $3,
+                    $4,
                     'shop_purchase',
-                    $3::jsonb
+                    $5::jsonb
                 )
                 """,
-
-                user_id,
-                -item["price"],
-                json.dumps({
-                    "item_id": item_id
+                int(user_id),
+                -price,
+                before,
+                after,
+                json_dump({
+                    "item_id": item["id"],
+                    "code": item["code"],
                 }),
             )
 
-            return item
+            return True, {
+                "item": dict(item),
+                "balance": after,
+            }
 
 
 # ============================================================
@@ -2588,19 +3046,15 @@ async def get_inventory(
             s.title,
             s.description,
             s.kind,
+            s.price,
             s.data
-
         FROM inventory i
-
         JOIN shop_items s
             ON s.id = i.item_id
-
         WHERE i.user_id = $1
-
         ORDER BY i.acquired_at DESC
         """,
-
-        user_id,
+        int(user_id),
     )
 
 
@@ -2658,24 +3112,45 @@ async def get_stats():
         """
     )
 
+    missions = await db.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM missions
+        WHERE active = TRUE
+        """
+    )
+
     return {
-        "users": users,
-        "active_users": active_users,
-        "total_coins": total_coins,
-        "games": games,
-        "pvp_matches": pvp,
-        "referrals": referrals,
+        "users": int(users or 0),
+        "active_users": int(active_users or 0),
+        "total_coins": int(total_coins or 0),
+        "games": int(games or 0),
+        "pvp_matches": int(pvp or 0),
+        "referrals": int(referrals or 0),
+        "missions": int(missions or 0),
     }
+
 
 # ============================================================
 # GAMES API
 # ============================================================
 
 async def get_games():
+
     db = check_pool()
+
     return await db.fetch(
         """
-        SELECT id, code, title, description, emoji, enabled, min_bet, max_bet, created_at
+        SELECT
+            id,
+            code,
+            title,
+            description,
+            emoji,
+            enabled,
+            min_bet,
+            max_bet,
+            created_at
         FROM games
         WHERE enabled = TRUE
         ORDER BY id ASC
@@ -2683,11 +3158,24 @@ async def get_games():
     )
 
 
-async def get_game(game_code):
+async def get_game(
+    game_code,
+):
+
     db = check_pool()
+
     return await db.fetchrow(
         """
-        SELECT id, code, title, description, emoji, enabled, min_bet, max_bet, created_at
+        SELECT
+            id,
+            code,
+            title,
+            description,
+            emoji,
+            enabled,
+            min_bet,
+            max_bet,
+            created_at
         FROM games
         WHERE code = $1
         LIMIT 1
@@ -2696,96 +3184,255 @@ async def get_game(game_code):
     )
 
 
-async def play_game(user_id: int, game_code: str, bet: int, win: int, multiplier: Optional[float] = None, result_data: Optional[dict] = None):
-    if bet <= 0:
-        raise ValueError("Ставка должна быть больше 0")
-    if win < 0:
-        raise ValueError("Некорректный результат игры")
-
-    db = check_pool()
-    profit = int(win) - int(bet)
-
-    async with db.acquire() as conn:
-        async with conn.transaction():
-            user = await conn.fetchrow(
-                "SELECT id, balance, banned FROM users WHERE id = $1 FOR UPDATE",
-                user_id,
-            )
-            if not user:
-                raise ValueError("Пользователь не найден")
-            if user["banned"]:
-                raise ValueError("Пользователь заблокирован")
-            before = int(user["balance"])
-            if before < int(bet):
-                raise ValueError("Недостаточно Fenix Coin")
-            after = before + profit
-
-            await conn.execute(
-                """
-                UPDATE users
-                SET balance = $2, games = games + 1,
-                    wins = wins + $3, losses = losses + $4,
-                    last_activity_at = NOW(), updated_at = NOW()
-                WHERE id = $1
-                """,
-                user_id, after, 1 if profit > 0 else 0, 1 if profit <= 0 else 0,
-            )
-
-            await conn.execute(
-                """
-                INSERT INTO game_history (user_id, game_code, bet, win, profit, multiplier, result)
-                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-                """,
-                user_id, str(game_code), int(bet), int(win), int(profit), multiplier,
-                json.dumps(result_data or {}, ensure_ascii=False),
-            )
-
-            await conn.execute(
-                """
-                INSERT INTO transactions (user_id, amount, balance_before, balance_after, reason, meta)
-                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-                """,
-                user_id, int(profit), before, after, f"game:{game_code}",
-                json.dumps({"game": str(game_code), "bet": int(bet), "win": int(win), "multiplier": multiplier}, ensure_ascii=False),
-            )
-
-            return {
-                "win": profit > 0,
-                "bet": int(bet),
-                "win_amount": int(win),
-                "profit": int(profit),
-                "multiplier": multiplier,
-                "balance": int(after),
-                "game": str(game_code),
-            }
-
-
-
 # ============================================================
-# PLAYER STATS API
+# PLAYER STATS
 # ============================================================
 
-async def get_player_stats(user_id: int):
+async def get_player_stats(
+    user_id: int,
+):
+
     db = check_pool()
+
     row = await db.fetchrow(
         """
         SELECT
-            id, username, first_name, last_name, balance, xp, level,
-            games, wins, losses, referrals, streak, banned, admin,
-            created_at, last_activity_at
+            id,
+            username,
+            first_name,
+            last_name,
+            balance,
+            xp,
+            level,
+            games,
+            wins,
+            losses,
+            referrals,
+            streak,
+            created_at,
+            last_activity_at
         FROM users
         WHERE id = $1
-        LIMIT 1
         """,
-        user_id,
+        int(user_id),
     )
 
     if not row:
         return None
 
-    games = int(row["games"] or 0)
-    wins = int(row["wins"] or 0)
+    return row
 
-    data = dict(row)
-    data["win_rate"] = round((wins / games) * 100, 2) if games else 0.0
-    return data
+
+# ============================================================
+# NOTIFICATIONS
+# ============================================================
+
+async def create_notification(
+    user_id: int,
+    message: str,
+    title: str = "",
+):
+
+    db = check_pool()
+
+    return await db.fetchrow(
+        """
+        INSERT INTO notifications
+        (
+            user_id,
+            title,
+            message
+        )
+        VALUES
+        (
+            $1,
+            $2,
+            $3
+        )
+        RETURNING *
+        """,
+        int(user_id),
+        title,
+        message,
+    )
+
+
+async def get_notifications(
+    user_id: int,
+    limit: int = 30,
+):
+
+    db = check_pool()
+
+    return await db.fetch(
+        """
+        SELECT *
+        FROM notifications
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2
+        """,
+        int(user_id),
+        max(1, min(int(limit), 100)),
+    )
+
+
+async def mark_notifications_read(
+    user_id: int,
+):
+
+    db = check_pool()
+
+    await db.execute(
+        """
+        UPDATE notifications
+        SET read = TRUE
+        WHERE user_id = $1
+        """,
+        int(user_id),
+    )
+
+
+# ============================================================
+# ACHIEVEMENTS
+# ============================================================
+
+async def get_achievements():
+
+    db = check_pool()
+
+    return await db.fetch(
+        """
+        SELECT *
+        FROM achievements
+        ORDER BY id ASC
+        """
+    )
+
+
+async def get_user_achievements(
+    user_id: int,
+):
+
+    db = check_pool()
+
+    return await db.fetch(
+        """
+        SELECT
+            a.*,
+            ua.created_at AS unlocked_at
+        FROM user_achievements ua
+        JOIN achievements a
+            ON a.id = ua.achievement_id
+        WHERE ua.user_id = $1
+        ORDER BY ua.created_at DESC
+        """,
+        int(user_id),
+    )
+
+
+async def unlock_achievement(
+    user_id: int,
+    code: str,
+):
+
+    db = check_pool()
+
+    async with db.acquire() as conn:
+
+        async with conn.transaction():
+
+            achievement = await conn.fetchrow(
+                """
+                SELECT *
+                FROM achievements
+                WHERE code = $1
+                """,
+                str(code),
+            )
+
+            if not achievement:
+                return False
+
+            inserted = await conn.fetchrow(
+                """
+                INSERT INTO user_achievements
+                (
+                    user_id,
+                    achievement_id
+                )
+                VALUES
+                (
+                    $1,
+                    $2
+                )
+                ON CONFLICT DO NOTHING
+                RETURNING *
+                """,
+                int(user_id),
+                int(achievement["id"]),
+            )
+
+            if not inserted:
+                return False
+
+            reward = int(
+                achievement["reward"]
+            )
+
+            if reward > 0:
+
+                user = await conn.fetchrow(
+                    """
+                    SELECT balance
+                    FROM users
+                    WHERE id = $1
+                    FOR UPDATE
+                    """,
+                    int(user_id),
+                )
+
+                before = int(user["balance"])
+                after = before + reward
+
+                await conn.execute(
+                    """
+                    UPDATE users
+                    SET balance = $2
+                    WHERE id = $1
+                    """,
+                    int(user_id),
+                    after,
+                )
+
+                await conn.execute(
+                    """
+                    INSERT INTO transactions
+                    (
+                        user_id,
+                        amount,
+                        balance_before,
+                        balance_after,
+                        reason,
+                        meta
+                    )
+                    VALUES
+                    (
+                        $1,
+                        $2,
+                        $3,
+                        $4,
+                        'achievement',
+                        $5::jsonb
+                    )
+                    """,
+                    int(user_id),
+                    reward,
+                    before,
+                    after,
+                    json_dump({
+                        "achievement": code
+                    }),
+                )
+
+            return True
