@@ -1259,3 +1259,219 @@ async def remove_coins(uid, amount, reason="system"):
         -abs(amount),
         reason,
     )
+# =========================================================
+# UNIVERSAL GAME ENGINE
+# =========================================================
+
+async def play_game(
+    uid: int,
+    game_code: str,
+    bet: int,
+    win: bool,
+    multiplier: float = 0.0,
+    data: dict | None = None,
+):
+    if bet <= 0:
+        raise ValueError("invalid_bet")
+
+    user = await get_user(uid)
+
+    if not user:
+        raise ValueError("user_not_found")
+
+    if user["banned"]:
+        raise ValueError("banned")
+
+    if user["balance"] < bet:
+        raise ValueError("insufficient_funds")
+
+    profit = 0
+
+    if win:
+        payout = int(bet * multiplier)
+        profit = payout - bet
+    else:
+        payout = 0
+        profit = -bet
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+
+            row = await conn.fetchrow(
+                """
+                SELECT balance
+                FROM users
+                WHERE id=$1
+                FOR UPDATE
+                """,
+                uid,
+            )
+
+            if not row:
+                raise ValueError("user_not_found")
+
+            before = row["balance"]
+
+            if before < bet:
+                raise ValueError("insufficient_funds")
+
+            after = before + profit
+
+            await conn.execute(
+                """
+                UPDATE users
+                SET
+                    balance=$2,
+                    games=games+1,
+                    wins=wins+$3,
+                    losses=losses+$4,
+                    xp=xp+$5,
+                    level=GREATEST(1, 1 + (($6)::bigint / 100))
+                WHERE id=$1
+                """,
+                uid,
+                after,
+                1 if win else 0,
+                0 if win else 1,
+                max(1, bet // 10),
+                after,
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO game_results(
+                    user_id,
+                    game_code,
+                    bet,
+                    win,
+                    profit,
+                    multiplier,
+                    data
+                )
+                VALUES($1,$2,$3,$4,$5,$6,$7)
+                """,
+                uid,
+                game_code,
+                bet,
+                win,
+                profit,
+                multiplier,
+                data or {},
+            )
+
+            await conn.execute(
+                """
+                INSERT INTO transactions(
+                    user_id,
+                    amount,
+                    balance_before,
+                    balance_after,
+                    reason,
+                    meta
+                )
+                VALUES(
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    $6
+                )
+                """,
+                uid,
+                profit,
+                before,
+                after,
+                f"game:{game_code}",
+                data or {},
+            )
+
+            return {
+                "game": game_code,
+                "bet": bet,
+                "win": win,
+                "multiplier": multiplier,
+                "profit": profit,
+                "balance_before": before,
+                "balance_after": after,
+            }
+
+
+# =========================================================
+# GAME LIST
+# =========================================================
+
+async def get_games():
+    return await pool.fetch(
+        """
+        SELECT
+            id,
+            code,
+            title,
+            description,
+            emoji,
+            enabled,
+            min_bet,
+            max_bet
+        FROM games
+        WHERE enabled=TRUE
+        ORDER BY id
+        """
+    )
+
+
+async def get_game(code: str):
+    return await pool.fetchrow(
+        """
+        SELECT *
+        FROM games
+        WHERE code=$1
+        """,
+        code,
+    )
+
+
+# =========================================================
+# PLAYER STATS
+# =========================================================
+
+async def get_player_stats(uid: int):
+    return await pool.fetchrow(
+        """
+        SELECT
+            id,
+            username,
+            first_name,
+            balance,
+            xp,
+            level,
+            games,
+            wins,
+            losses,
+            referrals,
+            streak,
+            created_at
+        FROM users
+        WHERE id=$1
+        """,
+        uid,
+    )
+
+
+async def get_player_game_stats(uid: int):
+    return await pool.fetch(
+        """
+        SELECT
+            game_code,
+            COUNT(*) AS games,
+            COUNT(*) FILTER (WHERE win=TRUE) AS wins,
+            COUNT(*) FILTER (WHERE win=FALSE) AS losses,
+            COALESCE(SUM(profit),0) AS profit,
+            COALESCE(SUM(bet),0) AS turnover
+        FROM game_results
+        WHERE user_id=$1
+        GROUP BY game_code
+        ORDER BY profit DESC
+        """,
+        uid,
+    )
