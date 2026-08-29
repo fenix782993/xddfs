@@ -2844,3 +2844,130 @@ async def play_game(user_id: int, game_code: str, bet: int, result=None):
                 "delta": delta,
                 "balance": new_balance,
             }
+# ============================================================
+# PLAY GAME WRAPPER (FIX FOR APP/WEB.PY)
+# ============================================================
+
+async def play_game(
+    user_id: int,
+    game_code: str,
+    bet: int,
+    win: bool,
+    multiplier: float,
+    result_data: dict,
+):
+    """
+    Универсальная функция для проведения игровой ставки:
+    1. Списывает ставку или начисляет выигрыш.
+    2. Записывает историю игры.
+    3. Возвращает итоговые данные.
+    """
+    db = check_pool()
+
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            # Получаем пользователя с блокировкой строки
+            user = await conn.fetchrow(
+                """
+                SELECT balance, banned
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                user_id,
+            )
+
+            if not user:
+                raise ValueError("user_not_found")
+            if user["banned"]:
+                raise ValueError("user_banned")
+
+            balance_before = user["balance"]
+
+            if balance_before < bet:
+                raise ValueError("insufficient_funds")
+
+            # Считаем профит и итоговый выигрыш
+            # Если win == True, выигрыш = бет * множитель, профит положительный
+            # Если win == False, выигрыш = 0, профит = -бет
+            if win:
+                total_win = int(bet * multiplier)
+                profit = total_win - bet
+            else:
+                total_win = 0
+                profit = -bet
+
+            new_balance = balance_before - bet + total_win
+
+            if new_balance < 0:
+                raise ValueError("insufficient_funds")
+
+            # Обновляем баланс и статистику игр пользователя
+            await conn.execute(
+                """
+                UPDATE users
+                SET
+                    balance = $2,
+                    games = games + 1,
+                    wins = wins + $3,
+                    losses = losses + $4,
+                    updated_at = NOW()
+                WHERE id = $1
+                """,
+                user_id,
+                new_balance,
+                1 if win else 0,
+                0 if win else 1,
+            )
+
+            # Записываем историю игры
+            await conn.execute(
+                """
+                INSERT INTO game_history (
+                    user_id,
+                    game_code,
+                    bet,
+                    win,
+                    profit,
+                    multiplier,
+                    result
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+                """,
+                user_id,
+                game_code,
+                bet,
+                total_win,
+                profit,
+                multiplier,
+                json.dumps(result_data or {}),
+            )
+
+            # Записываем транзакцию
+            await conn.execute(
+                """
+                INSERT INTO transactions (
+                    user_id,
+                    amount,
+                    balance_before,
+                    balance_after,
+                    reason,
+                    meta
+                )
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                """,
+                user_id,
+                profit,
+                balance_before,
+                new_balance,
+                "game_" + game_code,
+                json.dumps({"multiplier": multiplier}),
+            )
+
+            return {
+                "win": win,
+                "bet": bet,
+                "profit": profit,
+                "total_win": total_win,
+                "balance": new_balance,
+            }
