@@ -2789,3 +2789,58 @@ async def play_game(user_id: int, game_code: str, bet: int, result=None):
                 "delta": delta,
                 "balance": new_balance,
             }
+async def play_game(user_id: int, game_code: str, bet: int, result=None):
+    db = check_pool()
+
+    if bet <= 0:
+        raise ValueError("Ставка должна быть больше 0")
+
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            user = await conn.fetchrow(
+                """
+                SELECT id, balance
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                """,
+                user_id,
+            )
+
+            if not user:
+                raise ValueError("Пользователь не найден")
+
+            balance = int(user["balance"])
+
+            if balance < bet:
+                raise ValueError("Недостаточно Fenix Coin")
+
+            result = str(result or "lose").lower()
+
+            if result == "win":
+                delta = bet
+            elif result == "draw":
+                delta = 0
+            else:
+                delta = -bet
+
+            new_balance = balance + delta
+
+            await conn.execute(
+                """
+                UPDATE users
+                SET balance = $1
+                WHERE id = $2
+                """,
+                new_balance,
+                user_id,
+            )
+
+            return {
+                "user_id": user_id,
+                "game": game_code,
+                "bet": bet,
+                "result": result,
+                "delta": delta,
+                "balance": new_balance,
+            }
