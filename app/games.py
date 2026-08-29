@@ -1,132 +1,178 @@
-from aiogram.types import (
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
+import random
+from typing import Any
 
 
-def games_menu():
+def dice():
+    value = random.randint(1, 6)
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    return {
+        "value": value,
+        "emoji": f"🎲 {value}",
+    }
 
-            [
-                InlineKeyboardButton(
-                    text="🎲 Dice",
-                    callback_data="game:dice"
-                ),
-                InlineKeyboardButton(
-                    text="🎰 Slots",
-                    callback_data="game:slots"
-                ),
-            ],
 
-            [
-                InlineKeyboardButton(
-                    text="💣 Mines",
-                    callback_data="game:mines"
-                ),
-                InlineKeyboardButton(
-                    text="📈 Crash",
-                    callback_data="game:crash"
-                ),
-            ],
+def darts():
+    value = random.randint(1, 6)
 
-            [
-                InlineKeyboardButton(
-                    text="🎡 Roulette",
-                    callback_data="game:roulette"
-                ),
-            ],
+    return {
+        "value": value,
+        "emoji": f"🎯 {value}",
+    }
 
-            [
-                InlineKeyboardButton(
-                    text="⚽ Football",
-                    callback_data="game:football"
-                ),
-                InlineKeyboardButton(
-                    text="🏀 Basketball",
-                    callback_data="game:basketball"
-                ),
-            ],
 
-            [
-                InlineKeyboardButton(
-                    text="🎯 Darts",
-                    callback_data="game:darts"
-                ),
-                InlineKeyboardButton(
-                    text="🎳 Bowling",
-                    callback_data="game:bowling"
-                ),
-            ],
+def football():
+    value = random.randint(1, 6)
 
-            [
-                InlineKeyboardButton(
-                    text="⚔️ PvP Бои",
-                    callback_data="pvp"
-                ),
-            ],
+    if value >= 5:
+        return {
+            "value": value,
+            "goal": True,
+            "emoji": "⚽ GOAL!",
+        }
 
-            [
-                InlineKeyboardButton(
-                    text="🤖 PvE Бои",
-                    callback_data="pve"
-                ),
-            ],
+    return {
+        "value": value,
+        "goal": False,
+        "emoji": "⚽ MISS",
+    }
 
-            [
-                InlineKeyboardButton(
-                    text="◀️ Назад",
-                    callback_data="home"
-                )
-            ],
-        ]
+
+def basketball():
+    value = random.randint(1, 6)
+
+    if value >= 5:
+        return {
+            "value": value,
+            "score": True,
+            "emoji": "🏀 SCORE!",
+        }
+
+    return {
+        "value": value,
+        "score": False,
+        "emoji": "🏀 MISS",
+    }
+
+
+def bowling():
+    value = random.randint(1, 6)
+
+    return {
+        "value": value,
+        "pins": value,
+        "emoji": f"🎳 {value} pins",
+    }
+
+
+def slots():
+    symbols = [
+        "🍒",
+        "🍋",
+        "🍊",
+        "🔔",
+        "⭐",
+        "💎",
+        "7️⃣",
+    ]
+
+    result = [
+        random.choice(symbols),
+        random.choice(symbols),
+        random.choice(symbols),
+    ]
+
+    if result[0] == result[1] == result[2]:
+        multiplier = 10.0
+        win = True
+
+    elif result[0] == result[1] or result[1] == result[2]:
+        multiplier = 2.0
+        win = True
+
+    else:
+        multiplier = 0.0
+        win = False
+
+    return {
+        "symbols": result,
+        "display": " | ".join(result),
+        "win": win,
+        "multiplier": multiplier,
+    }
+
+
+def mines():
+    mines_count = 5
+
+    mine_positions = random.sample(
+        range(25),
+        mines_count,
     )
 
+    safe_positions = [
+        x for x in range(25)
+        if x not in mine_positions
+    ]
 
-def bet_menu(game: str):
+    return {
+        "size": 5,
+        "mines": mine_positions,
+        "safe": safe_positions,
+    }
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
 
-            [
-                InlineKeyboardButton(
-                    text="💰 10",
-                    callback_data=f"bet:{game}:10"
-                ),
-                InlineKeyboardButton(
-                    text="💰 50",
-                    callback_data=f"bet:{game}:50"
-                ),
-            ],
+def crash():
+    value = random.random()
 
-            [
-                InlineKeyboardButton(
-                    text="💰 100",
-                    callback_data=f"bet:{game}:100"
-                ),
-                InlineKeyboardButton(
-                    text="💰 500",
-                    callback_data=f"bet:{game}:500"
-                ),
-            ],
+    if value < 0.03:
+        multiplier = 1.0
+    else:
+        multiplier = round(
+            1.0 + random.random() * 9.0,
+            2,
+        )
 
-            [
-                InlineKeyboardButton(
-                    text="💰 1 000",
-                    callback_data=f"bet:{game}:1000"
-                ),
-                InlineKeyboardButton(
-                    text="💰 5 000",
-                    callback_data=f"bet:{game}:5000"
-                ),
-            ],
+    return {
+        "multiplier": multiplier,
+        "crashed": multiplier <= 1.0,
+    }
 
-            [
-                InlineKeyboardButton(
-                    text="◀️ К играм",
-                    callback_data="games"
-                )
-            ]
-        ]
-    )
+
+def roulette():
+    number = random.randint(0, 36)
+
+    if number == 0:
+        color = "green"
+    elif number % 2:
+        color = "red"
+    else:
+        color = "black"
+
+    return {
+        "number": number,
+        "color": color,
+    }
+
+
+def play(
+    game_code: str,
+) -> dict[str, Any]:
+
+    games = {
+        "dice": dice,
+        "darts": darts,
+        "football": football,
+        "basketball": basketball,
+        "bowling": bowling,
+        "slots": slots,
+        "mines": mines,
+        "crash": crash,
+        "roulette": roulette,
+    }
+
+    game = games.get(game_code)
+
+    if not game:
+        raise ValueError("unknown_game")
+
+    return game()
