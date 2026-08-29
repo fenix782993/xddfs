@@ -1629,3 +1629,79 @@ async def finish_pvp_room(
             loser_id,
             room_code,
         )
+# =========================================================
+# GAME HISTORY
+# =========================================================
+
+async def get_game_history(
+    telegram_id: int,
+    limit: int = 50,
+    offset: int = 0,
+):
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT
+                id,
+                user_id,
+                game_code,
+                bet,
+                win,
+                profit,
+                multiplier,
+                data,
+                created_at
+            FROM game_results
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            OFFSET $3
+            """,
+            telegram_id,
+            limit,
+            offset,
+        )
+
+
+async def get_recent_games(
+    limit: int = 50,
+):
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT
+                id,
+                user_id,
+                game_code,
+                bet,
+                win,
+                profit,
+                multiplier,
+                data,
+                created_at
+            FROM game_results
+            ORDER BY created_at DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+
+
+async def get_game_history_count(
+    telegram_id: int,
+):
+    pool = await get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            """
+            SELECT COUNT(*)
+            FROM game_results
+            WHERE user_id = $1
+            """,
+            telegram_id,
+        )
