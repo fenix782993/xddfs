@@ -25,6 +25,10 @@ from app.db import (
     get_inventory,
     get_stats,
     get_player_stats,
+    check_pool,
+    create_pvp,
+    join_pvp,
+    finish_pvp,
 )
 
 from app.games import (
@@ -37,6 +41,12 @@ from app.games import (
     mines,
     crash,
     roulette,
+    coinflip,
+    highlow,
+    rps,
+    plinko,
+    blackjack,
+    race,
 )
 
 
@@ -136,6 +146,17 @@ class ShopBuyRequest(BaseModel):
     code: str
 
 
+class PVPCreateRequest(BaseModel):
+    user_id: int
+    game: str = "dice"
+    stake: int = Field(gt=0, le=1000000)
+
+
+class PVPJoinRequest(BaseModel):
+    user_id: int
+    match_id: int
+
+
 # =========================================================
 # HEALTH
 # =========================================================
@@ -186,6 +207,7 @@ async def register(req: RegisterRequest):
         id = req.user_id
         username = req.username
         first_name = req.first_name
+        last_name = ""
 
     row, created = await ensure_user(
         TelegramUser(),
@@ -258,101 +280,17 @@ async def api_game(game_code: str):
 # GAME RESULT ENGINE
 # =========================================================
 
-def calculate_game(game_code: str):
-    """
-    Возвращает:
-        win
-        multiplier
-        data
-    """
-
-    if game_code == "dice":
-        r = dice()
-
-        # 4-6 = победа
-        win = r["value"] >= 4
-
-        multiplier = 1.8 if win else 0
-
-        return win, multiplier, r
-
-    if game_code == "darts":
-        r = darts()
-
-        win = r["value"] >= 4
-
-        multiplier = 1.8 if win else 0
-
-        return win, multiplier, r
-
-    if game_code == "football":
-        r = football()
-
-        win = r["goal"]
-
-        multiplier = 2.0 if win else 0
-
-        return win, multiplier, r
-
-    if game_code == "basketball":
-        r = basketball()
-
-        win = r["score"]
-
-        multiplier = 2.0 if win else 0
-
-        return win, multiplier, r
-
-    if game_code == "bowling":
-        r = bowling()
-
-        win = r["pins"] >= 4
-
-        multiplier = 1.8 if win else 0
-
-        return win, multiplier, r
-
-    if game_code == "slots":
-        r = slots()
-
-        return (
-            r["win"],
-            r["multiplier"],
-            r,
-        )
-
-    if game_code == "mines":
-        r = mines()
-
-        # Первый ход считается безопасным.
-        win = True
-        multiplier = 1.25
-
-        return win, multiplier, {
-            "size": r["size"],
-            "mines": r["mines"],
-        }
-
-    if game_code == "crash":
-        r = crash()
-
-        if r["crashed"]:
-            return False, 0, r
-
-        # Автоматический cashout.
-        return True, r["multiplier"], r
-
-    if game_code == "roulette":
-        r = roulette()
-
-        # Автоматическая ставка на красное/чёрное.
-        win = r["color"] == "red"
-
-        multiplier = 2.0 if win else 0
-
-        return win, multiplier, r
-
-    raise ValueError("unknown_game")
+def calculate_game(game_code: str, bet: int):
+    # Every result is generated server-side. The browser never chooses the outcome.
+    fn = {
+        "dice": dice, "darts": darts, "football": football,
+        "basketball": basketball, "bowling": bowling, "slots": slots,
+        "mines": mines, "crash": crash, "roulette": roulette,
+    }.get(str(game_code).lower())
+    if not fn:
+        raise ValueError("unknown_game")
+    r = fn(int(bet))
+    return bool(r["win"]), float(r["multiplier"]), r
 
 
 # =========================================================
@@ -397,7 +335,7 @@ async def api_play(req: PlayRequest):
         )
 
     try:
-        win, multiplier, data = calculate_game(req.game)
+        win, multiplier, data = calculate_game(req.game, req.bet)
 
         result = await play_game(
             req.user_id,
@@ -419,6 +357,71 @@ async def api_play(req: PlayRequest):
             status_code=400,
             detail=str(e),
         )
+
+
+# =========================================================
+# PVP
+# =========================================================
+
+@app.get("/api/pvp")
+async def api_pvp_list():
+    db = check_pool()
+    rows = await db.fetch("""
+        SELECT p.*, u.username AS creator_username, u.first_name AS creator_first_name
+        FROM pvp_matches p JOIN users u ON u.id=p.creator_id
+        WHERE p.status='open' ORDER BY p.created_at DESC LIMIT 50
+    """)
+    return {"ok": True, "matches": [row_to_dict(x) for x in rows]}
+
+
+@app.post("/api/pvp/create")
+async def api_pvp_create(req: PVPCreateRequest):
+    await require_user(req.user_id)
+    if not await get_game(req.game):
+        raise HTTPException(404, "Игра не найдена")
+    try:
+        row = await create_pvp(req.user_id, req.stake, req.game)
+        return {"ok": True, "match": row_to_dict(row)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/pvp/join")
+async def api_pvp_join(req: PVPJoinRequest):
+    await require_user(req.user_id)
+    try:
+        row = await join_pvp(req.match_id, req.user_id)
+        return {"ok": True, "match": row_to_dict(row)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/pvp/{match_id}/play")
+async def api_pvp_play(match_id: int, req: UserRequest):
+    await require_user(req.user_id)
+    db = check_pool()
+    match = await db.fetchrow("SELECT * FROM pvp_matches WHERE id=$1 AND status='active'", match_id)
+    if not match:
+        raise HTTPException(404, "Матч не найден или уже завершён")
+    if req.user_id not in (match["creator_id"], match["opponent_id"]):
+        raise HTTPException(403, "Вы не участник матча")
+    # One server-side round per player. Scores are written atomically by finish_pvp.
+    if match["game_code"] == "dice":
+        creator_score=random.randint(1,6); opponent_score=random.randint(1,6)
+    elif match["game_code"] == "darts":
+        creator_score=random.randint(1,6); opponent_score=random.randint(1,6)
+    elif match["game_code"] == "football":
+        creator_score=random.randint(0,5); opponent_score=random.randint(0,5)
+    elif match["game_code"] == "basketball":
+        creator_score=random.randint(70,130); opponent_score=random.randint(70,130)
+    else:
+        creator_score=random.randint(1,100); opponent_score=random.randint(1,100)
+    if creator_score == opponent_score:
+        creator_score += 1
+    winner=match["creator_id"] if creator_score>opponent_score else match["opponent_id"]
+    loser=match["opponent_id"] if winner==match["creator_id"] else match["creator_id"]
+    prize=await finish_pvp(match_id,winner,loser,creator_score,opponent_score)
+    return {"ok":True,"winner_id":winner,"loser_id":loser,"creator_score":creator_score,"opponent_score":opponent_score,"prize":prize}
 
 
 # =========================================================
@@ -536,21 +539,11 @@ async def api_claim_mission(
 ):
     await require_user(req.user_id)
 
-    success, result = await claim_mission(
-        req.user_id,
-        req.mission_id,
-    )
-
-    if not success:
-        raise HTTPException(
-            status_code=400,
-            detail=result,
-        )
-
-    return {
-        "ok": True,
-        "reward": result,
-    }
+    try:
+        reward = await claim_mission(req.user_id, req.mission_id)
+        return {"ok": True, "reward": reward}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # =========================================================
@@ -1424,6 +1417,22 @@ button {
         id="games"
         class="games"
     ></div>
+
+    <div class="section-title">👥 PvP <span>ИГРАЙ ПРОТИВ ИГРОКОВ</span></div>
+    <div class="card">
+        <div class="bet-row">
+            <select id="pvpGame" class="bet-input">
+                <option value="dice">🎲 Dice</option>
+                <option value="darts">🎯 Darts</option>
+                <option value="football">⚽ Football</option>
+                <option value="basketball">🏀 Basketball</option>
+                <option value="mines">💣 Mines</option>
+            </select>
+            <input id="pvpStake" class="bet-input" type="number" value="250" min="10">
+        </div>
+        <button class="play-btn" onclick="createPvp()">⚔️ СОЗДАТЬ МАТЧ</button>
+        <div id="pvpList" class="list" style="margin-top:10px"></div>
+    </div>
 
 </section>
 
@@ -2547,16 +2556,31 @@ function showPage(
 }
 
 
+async function loadPvp() {
+    try {
+        const data=await api("/api/pvp");
+        const box=document.getElementById("pvpList");
+        box.innerHTML=data.matches.length ? data.matches.map(m=>`<div class="list-item"><div><b>⚔️ ${m.game_code}</b><div class="muted">${m.creator_first_name||m.creator_username||"Игрок"} · ставка ${m.stake} FC</div></div><button onclick="joinPvp(${m.id})" style="border:0;border-radius:10px;padding:9px 12px;background:#ff244c;color:#fff;font-weight:900">ВОЙТИ</button></div>`).join("") : '<div class="empty">Открытых матчей пока нет</div>';
+    } catch(e) { console.error(e); }
+}
+
+async function createPvp() {
+    const stake=Number(document.getElementById("pvpStake").value);
+    const game=document.getElementById("pvpGame").value;
+    try { const d=await api("/api/pvp/create",{method:"POST",body:JSON.stringify({user_id:userId,game,stake})}); toast("⚔️ Матч #"+d.match.id+" создан"); await loadUser(); await loadPvp(); } catch(e) { toast(e.message); }
+}
+
+async function joinPvp(id) {
+    try { const d=await api("/api/pvp/join",{method:"POST",body:JSON.stringify({user_id:userId,match_id:id})}); toast("⚔️ Ты вошёл в матч"); const r=await api("/api/pvp/"+id+"/play",{method:"POST",body:JSON.stringify({user_id:userId})}); toast(r.winner_id===userId ? "🏆 Победа +"+r.prize+" FC" : "💀 Поражение"); await loadUser(); await loadPvp(); } catch(e) { toast(e.message); }
+}
+
 async function boot() {
 
     try {
 
         await registerUser();
 
-        await Promise.all([
-            loadUser(),
-            loadGames()
-        ]);
+        await Promise.all([loadUser(), loadGames(), loadPvp()]);
 
     } catch (e) {
 

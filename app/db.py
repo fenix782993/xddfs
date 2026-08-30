@@ -622,71 +622,22 @@ CREATE TABLE IF NOT EXISTS system_settings (
 # ============================================================
 
 DEFAULT_GAMES = [
-
-    (
-        "dice",
-        "🎲 Dice",
-        "Классическая игра в кости",
-        "🎲",
-    ),
-
-    (
-        "darts",
-        "🎯 Darts",
-        "Попади как можно ближе к центру",
-        "🎯",
-    ),
-
-    (
-        "football",
-        "⚽ Football",
-        "Telegram Football",
-        "⚽",
-    ),
-
-    (
-        "basketball",
-        "🏀 Basketball",
-        "Telegram Basketball",
-        "🏀",
-    ),
-
-    (
-        "bowling",
-        "🎳 Bowling",
-        "Telegram Bowling",
-        "🎳",
-    ),
-
-    (
-        "slots",
-        "🎰 Slots",
-        "Игровые слоты",
-        "🎰",
-    ),
-
-    (
-        "mines",
-        "💣 Mines",
-        "Поле 5×5 с минами",
-        "💣",
-    ),
-
-    (
-        "crash",
-        "📈 Crash",
-        "Забери выигрыш до краша",
-        "📈",
-    ),
-
-    (
-        "roulette",
-        "🎡 Roulette",
-        "Рулетка Fenix Coin",
-        "🎡",
-    ),
+    ("dice", "🎲 Dice", "Классическая игра в кости", "🎲"),
+    ("darts", "🎯 Darts", "Попади как можно ближе к центру", "🎯"),
+    ("football", "⚽ Football", "Симулятор футбольного матча", "⚽"),
+    ("basketball", "🏀 Basketball", "Симулятор баскетбольного матча", "🏀"),
+    ("bowling", "🎳 Bowling", "Сбивай кегли", "🎳"),
+    ("slots", "🎰 Slots", "Игровые слоты", "🎰"),
+    ("mines", "💣 Mines", "Поле 5×5 с минами", "💣"),
+    ("crash", "🚀 Crash", "Ракета растёт до краша — забери вовремя", "🚀"),
+    ("roulette", "🎡 Roulette", "Рулетка Fenix Coin", "🎡"),
+    ("coinflip", "🪙 Coin Flip", "Орёл или решка", "🪙"),
+    ("highlow", "🔢 High / Low", "Угадай: выше или ниже 50", "🔢"),
+    ("rps", "✊ RPS", "Камень, ножницы, бумага", "✊"),
+    ("plinko", "🔴 Plinko", "Падающий шар и множители", "🔴"),
+    ("blackjack", "🃏 Blackjack", "Игрок против дилера", "🃏"),
+    ("race", "🏁 Race", "Гонка четырёх игроков", "🏁"),
 ]
-
 
 # ============================================================
 # INIT
@@ -712,191 +663,6 @@ async def init_db():
 
         await conn.execute(SCHEMA)
 
-        # ============================================================
-        # ROBUST MIGRATIONS
-        # Existing Render databases may have been created by older
-        # versions. Every column used by this module is ensured here.
-        # ============================================================
-        migrations = [
-            # users
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS balance BIGINT NOT NULL DEFAULT 1000",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS xp BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS level INTEGER NOT NULL DEFAULT 1",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS games BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS wins BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS losses BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS referrals INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_rewarded BOOLEAN NOT NULL DEFAULT FALSE",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT FALSE",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS admin BOOLEAN NOT NULL DEFAULT FALSE",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS streak INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_claimed_at TIMESTAMPTZ",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            # transactions
-            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS user_id BIGINT",
-            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS amount BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS balance_before BIGINT",
-            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS balance_after BIGINT",
-            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT 'system'",
-            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            # games
-            "ALTER TABLE games ADD COLUMN IF NOT EXISTS code TEXT",
-            "ALTER TABLE games ADD COLUMN IF NOT EXISTS title TEXT",
-            "ALTER TABLE games ADD COLUMN IF NOT EXISTS description TEXT",
-            "ALTER TABLE games ADD COLUMN IF NOT EXISTS emoji TEXT",
-            "ALTER TABLE games ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE",
-            "ALTER TABLE games ADD COLUMN IF NOT EXISTS min_bet BIGINT NOT NULL DEFAULT 10",
-            "ALTER TABLE games ADD COLUMN IF NOT EXISTS max_bet BIGINT NOT NULL DEFAULT 100000",
-            "ALTER TABLE games ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            # history
-            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS user_id BIGINT",
-            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS game_code TEXT NOT NULL DEFAULT 'unknown'",
-            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS bet BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS win BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS profit BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS multiplier NUMERIC(12,4)",
-            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS result JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE game_history ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            # pvp
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS creator_id BIGINT",
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS opponent_id BIGINT",
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS game_code TEXT NOT NULL DEFAULT 'dice'",
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS stake BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS prize BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open'",
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS creator_score INTEGER",
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS opponent_score INTEGER",
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS winner_id BIGINT",
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS loser_id BIGINT",
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ",
-            "ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
-            # pve
-            "ALTER TABLE pve_battles ADD COLUMN IF NOT EXISTS user_id BIGINT",
-            "ALTER TABLE pve_battles ADD COLUMN IF NOT EXISTS difficulty TEXT NOT NULL DEFAULT 'easy'",
-            "ALTER TABLE pve_battles ADD COLUMN IF NOT EXISTS entry_fee BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE pve_battles ADD COLUMN IF NOT EXISTS reward BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE pve_battles ADD COLUMN IF NOT EXISTS player_score INTEGER",
-            "ALTER TABLE pve_battles ADD COLUMN IF NOT EXISTS enemy_score INTEGER",
-            "ALTER TABLE pve_battles ADD COLUMN IF NOT EXISTS result TEXT",
-            "ALTER TABLE pve_battles ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            "ALTER TABLE pve_battles ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
-            # missions
-            "ALTER TABLE missions ADD COLUMN IF NOT EXISTS title TEXT",
-            "ALTER TABLE missions ADD COLUMN IF NOT EXISTS description TEXT",
-            "ALTER TABLE missions ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'custom'",
-            "ALTER TABLE missions ADD COLUMN IF NOT EXISTS target TEXT",
-            "ALTER TABLE missions ADD COLUMN IF NOT EXISTS target_value BIGINT NOT NULL DEFAULT 1",
-            "ALTER TABLE missions ADD COLUMN IF NOT EXISTS reward BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE missions ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE",
-            "ALTER TABLE missions ADD COLUMN IF NOT EXISTS created_by BIGINT",
-            "ALTER TABLE missions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            # mission progress
-            "ALTER TABLE mission_progress ADD COLUMN IF NOT EXISTS user_id BIGINT",
-            "ALTER TABLE mission_progress ADD COLUMN IF NOT EXISTS mission_id INTEGER",
-            "ALTER TABLE mission_progress ADD COLUMN IF NOT EXISTS progress BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE mission_progress ADD COLUMN IF NOT EXISTS completed BOOLEAN NOT NULL DEFAULT FALSE",
-            "ALTER TABLE mission_progress ADD COLUMN IF NOT EXISTS claimed BOOLEAN NOT NULL DEFAULT FALSE",
-            "ALTER TABLE mission_progress ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            # referrals
-            "ALTER TABLE referrals ADD COLUMN IF NOT EXISTS referrer_id BIGINT",
-            "ALTER TABLE referrals ADD COLUMN IF NOT EXISTS referred_id BIGINT",
-            "ALTER TABLE referrals ADD COLUMN IF NOT EXISTS reward BIGINT NOT NULL DEFAULT 600",
-            "ALTER TABLE referrals ADD COLUMN IF NOT EXISTS rewarded BOOLEAN NOT NULL DEFAULT FALSE",
-            "ALTER TABLE referrals ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            "ALTER TABLE referrals ADD COLUMN IF NOT EXISTS rewarded_at TIMESTAMPTZ",
-            # daily
-            "ALTER TABLE daily_bonus_claims ADD COLUMN IF NOT EXISTS user_id BIGINT",
-            "ALTER TABLE daily_bonus_claims ADD COLUMN IF NOT EXISTS day DATE",
-            "ALTER TABLE daily_bonus_claims ADD COLUMN IF NOT EXISTS reward BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE daily_bonus_claims ADD COLUMN IF NOT EXISTS streak INTEGER NOT NULL DEFAULT 1",
-            "ALTER TABLE daily_bonus_claims ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            # achievements
-            "ALTER TABLE achievements ADD COLUMN IF NOT EXISTS code TEXT",
-            "ALTER TABLE achievements ADD COLUMN IF NOT EXISTS title TEXT",
-            "ALTER TABLE achievements ADD COLUMN IF NOT EXISTS description TEXT",
-            "ALTER TABLE achievements ADD COLUMN IF NOT EXISTS reward BIGINT NOT NULL DEFAULT 0",
-            # user achievements
-            "ALTER TABLE user_achievements ADD COLUMN IF NOT EXISTS user_id BIGINT",
-            "ALTER TABLE user_achievements ADD COLUMN IF NOT EXISTS achievement_id INTEGER",
-            "ALTER TABLE user_achievements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            # promo
-            "ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS reward BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS max_uses INTEGER NOT NULL DEFAULT 1",
-            "ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS uses INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE",
-            "ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ",
-            "ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            "ALTER TABLE promo_claims ADD COLUMN IF NOT EXISTS code TEXT",
-            "ALTER TABLE promo_claims ADD COLUMN IF NOT EXISTS user_id BIGINT",
-            "ALTER TABLE promo_claims ADD COLUMN IF NOT EXISTS reward BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE promo_claims ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            # shop/inventory
-            "ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS code TEXT",
-            "ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS title TEXT",
-            "ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS description TEXT",
-            "ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS price BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'item'",
-            "ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS data JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE",
-            "ALTER TABLE shop_items ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            "ALTER TABLE inventory ADD COLUMN IF NOT EXISTS user_id BIGINT",
-            "ALTER TABLE inventory ADD COLUMN IF NOT EXISTS item_id INTEGER",
-            "ALTER TABLE inventory ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1",
-            "ALTER TABLE inventory ADD COLUMN IF NOT EXISTS acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            # clans/tournaments/admin/notifications/settings
-            "ALTER TABLE clans ADD COLUMN IF NOT EXISTS name TEXT",
-            "ALTER TABLE clans ADD COLUMN IF NOT EXISTS tag TEXT",
-            "ALTER TABLE clans ADD COLUMN IF NOT EXISTS description TEXT",
-            "ALTER TABLE clans ADD COLUMN IF NOT EXISTS owner_id BIGINT",
-            "ALTER TABLE clans ADD COLUMN IF NOT EXISTS treasury BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE clans ADD COLUMN IF NOT EXISTS level INTEGER NOT NULL DEFAULT 1",
-            "ALTER TABLE clans ADD COLUMN IF NOT EXISTS xp BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE clans ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            "ALTER TABLE clan_members ADD COLUMN IF NOT EXISTS clan_id INTEGER",
-            "ALTER TABLE clan_members ADD COLUMN IF NOT EXISTS user_id BIGINT",
-            "ALTER TABLE clan_members ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member'",
-            "ALTER TABLE clan_members ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS title TEXT",
-            "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS description TEXT",
-            "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS game_code TEXT NOT NULL DEFAULT 'dice'",
-            "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS entry_fee BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS prize_pool BIGINT NOT NULL DEFAULT 0",
-            "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS max_players INTEGER NOT NULL DEFAULT 32",
-            "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open'",
-            "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS starts_at TIMESTAMPTZ",
-            "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ",
-            "ALTER TABLE tournaments ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            "ALTER TABLE tournament_players ADD COLUMN IF NOT EXISTS tournament_id INTEGER",
-            "ALTER TABLE tournament_players ADD COLUMN IF NOT EXISTS user_id BIGINT",
-            "ALTER TABLE tournament_players ADD COLUMN IF NOT EXISTS score INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE tournament_players ADD COLUMN IF NOT EXISTS position INTEGER",
-            "ALTER TABLE tournament_players ADD COLUMN IF NOT EXISTS joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            "ALTER TABLE admin_logs ADD COLUMN IF NOT EXISTS admin_id BIGINT",
-            "ALTER TABLE admin_logs ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'unknown'",
-            "ALTER TABLE admin_logs ADD COLUMN IF NOT EXISTS target_user_id BIGINT",
-            "ALTER TABLE admin_logs ADD COLUMN IF NOT EXISTS amount BIGINT",
-            "ALTER TABLE admin_logs ADD COLUMN IF NOT EXISTS data JSONB NOT NULL DEFAULT '{}'::jsonb",
-            "ALTER TABLE admin_logs ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS user_id BIGINT",
-            "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS title TEXT",
-            "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS message TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS read BOOLEAN NOT NULL DEFAULT FALSE",
-            "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-            "ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS value TEXT NOT NULL DEFAULT ''",
-            "ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()",
-        ]
-
-        for migration in migrations:
-            await conn.execute(migration)
-
         # Safe migrations for databases created by older builds
         await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS description TEXT")
         await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS emoji TEXT")
@@ -905,6 +671,12 @@ async def init_db():
         await conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS max_bet BIGINT NOT NULL DEFAULT 100000")
         await conn.execute("ALTER TABLE game_history ADD COLUMN IF NOT EXISTS multiplier NUMERIC(12,4)")
         await conn.execute("ALTER TABLE game_history ADD COLUMN IF NOT EXISTS result JSONB NOT NULL DEFAULT '{}'")
+        # Safe migrations for older deployments.
+        await conn.execute("ALTER TABLE achievements ADD COLUMN IF NOT EXISTS description TEXT")
+        await conn.execute("ALTER TABLE achievements ADD COLUMN IF NOT EXISTS reward BIGINT NOT NULL DEFAULT 0")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS xp BIGINT NOT NULL DEFAULT 0")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS level INTEGER NOT NULL DEFAULT 1")
 
         # ----------------------------------------------------
         # Default games
@@ -2637,7 +2409,7 @@ async def get_shop():
 
 async def buy_item(
     user_id: int,
-    item_id: int,
+    item_id,
 ):
 
     db = check_pool()
@@ -2725,7 +2497,7 @@ async def buy_item(
                 """,
 
                 user_id,
-                item_id,
+                item_id_int,
             )
 
             await conn.execute(
@@ -2748,7 +2520,7 @@ async def buy_item(
                 user_id,
                 -item["price"],
                 json.dumps({
-                    "item_id": item_id
+                    "item_id": item_id_int
                 }),
             )
 
