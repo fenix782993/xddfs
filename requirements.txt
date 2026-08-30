@@ -1,19 +1,6 @@
-# Fenix Coin Ultra — Mega Full
-
-Единая версия Mini App + Telegram bot + PostgreSQL.
-
-## Возможности
-- 13 игр из БД: Dice, Darts, Football, Basketball, Bowling, Slots, Mines, Crash, Roulette, Coin Flip, Blackjack, Reaction, Race.
-- Серверная экономика и история игр.
-- Настоящий раунд Mines 5x5 с блокировкой ставки, открытием клеток и cashout.
-- Crash с редким хвостом высоких множителей; около 25% раундов выше 3x.
-- PvP lobby: создание, вход и завершение матча.
-- Daily bonus, миссии, рефералы, магазин, инвентарь, рейтинг.
-- Telegram bot на aiogram 3.
-- Админ-команды `/stats`, `/give`, `/take`, `/ban` и Admin Center в Mini App.
-- Safe DB migrations, включая старые `achievements` без `description`.
-
-## Render
-Создай Web и Worker по `render.yaml`. Один PostgreSQL подключается к обоим сервисам через `DATABASE_URL`.
-
-Важно: `WEBAPP_URL` должен быть HTTPS URL web-сервиса Render. `BOT_TOKEN` — токен BotFather. `ADMIN_IDS` — Telegram ID администраторов.
+fastapi
+uvicorn[standard]
+asyncpg
+aiogram
+pydantic
+python-dotenv
