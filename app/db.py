@@ -125,6 +125,15 @@ CREATE TABLE IF NOT EXISTS games (
 -- GAME HISTORY
 -- ==========================================================
 
+CREATE TABLE IF NOT EXISTS mines_sessions (
+    id BIGSERIAL PRIMARY KEY, user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    bet BIGINT NOT NULL, size INTEGER NOT NULL DEFAULT 5, mines_count INTEGER NOT NULL DEFAULT 5,
+    mine_positions JSONB NOT NULL, opened JSONB NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'active',
+    multiplier NUMERIC(12,4) NOT NULL DEFAULT 1.0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_mines_sessions_user ON mines_sessions(user_id,status);
+
 CREATE TABLE IF NOT EXISTS game_history (
     id BIGSERIAL PRIMARY KEY,
 
@@ -1796,6 +1805,59 @@ async def claim_daily_bonus(
 
             return reward, streak
 
+
+# ============================================================
+# MINES SESSION
+# ============================================================
+
+async def mines_start(user_id:int, bet:int, size:int=5, mines_count:int=5):
+    db=check_pool()
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            active=await conn.fetchrow("SELECT id FROM mines_sessions WHERE user_id=$1 AND status='active' FOR UPDATE",user_id)
+            if active: raise ValueError('У вас уже есть активная игра Mines')
+            u=await conn.fetchrow('SELECT balance,banned FROM users WHERE id=$1 FOR UPDATE',user_id)
+            if not u or u['banned']: raise ValueError('Пользователь недоступен')
+            if int(u['balance'])<bet: raise ValueError('Недостаточно Fenix Coin')
+            positions=sorted(random.sample(range(size*size),mines_count))
+            await conn.execute('UPDATE users SET balance=balance-$2,updated_at=NOW() WHERE id=$1',user_id,bet)
+            row=await conn.fetchrow("INSERT INTO mines_sessions(user_id,bet,size,mines_count,mine_positions) VALUES($1,$2,$3,$4,$5::jsonb) RETURNING *",user_id,bet,size,mines_count,json.dumps(positions))
+            return row
+
+async def mines_reveal(user_id:int, session_id:int, cell:int):
+    db=check_pool()
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            s=await conn.fetchrow("SELECT * FROM mines_sessions WHERE id=$1 AND user_id=$2 AND status='active' FOR UPDATE",session_id,user_id)
+            if not s: raise ValueError('Сессия Mines не найдена')
+            opened=list(s['opened'] or []); mines=list(s['mine_positions'] or [])
+            if cell<0 or cell>=s['size']*s['size']: raise ValueError('Некорректная клетка')
+            if cell in opened: raise ValueError('Клетка уже открыта')
+            opened.append(cell); safe=sum(x not in mines for x in opened); mult=round(1.0+safe*0.35,2)
+            if cell in mines:
+                await conn.execute("UPDATE mines_sessions SET opened=$2::jsonb,status='lost',finished_at=NOW() WHERE id=$1",session_id,json.dumps(opened))
+                await conn.execute("UPDATE users SET games=games+1,losses=losses+1,updated_at=NOW() WHERE id=$1",user_id)
+                await conn.execute("INSERT INTO game_history(user_id,game_code,bet,win,profit,multiplier,result) VALUES($1,'mines',$2,0,$3,$4,$5::jsonb)",user_id,s['bet'],-s['bet'],0,json.dumps({'hit_mine':True,'cell':cell,'opened':opened}))
+                return {'status':'lost','hit_mine':True,'opened':opened,'mine_positions':mines,'multiplier':0,'profit':-int(s['bet'])}
+            await conn.execute("UPDATE mines_sessions SET opened=$2::jsonb,multiplier=$3 WHERE id=$1",session_id,json.dumps(opened),mult)
+            return {'status':'active','safe':True,'opened':opened,'multiplier':mult,'next_payout':int(s['bet']*mult)}
+
+async def mines_cashout(user_id:int, session_id:int):
+    db=check_pool()
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            s=await conn.fetchrow("SELECT * FROM mines_sessions WHERE id=$1 AND user_id=$2 AND status='active' FOR UPDATE",session_id,user_id)
+            if not s: raise ValueError('Сессия Mines не найдена')
+            opened=list(s['opened'] or []); mult=float(s['multiplier']); payout=int(s['bet']*mult); profit=payout-int(s['bet'])
+            if not opened: raise ValueError('Открой хотя бы одну клетку')
+            await conn.execute("UPDATE mines_sessions SET status='cashed',finished_at=NOW() WHERE id=$1",session_id)
+            await conn.execute("UPDATE users SET balance=balance+$2,games=games+1,wins=wins+1,updated_at=NOW() WHERE id=$1",user_id,payout)
+            await conn.execute("INSERT INTO transactions(user_id,amount,balance_before,balance_after,reason,meta) SELECT $1,$2,balance-$2,balance,'mines_cashout',$3::jsonb FROM users WHERE id=$1",user_id,payout,json.dumps({'session':session_id,'multiplier':mult}))
+            await conn.execute("INSERT INTO game_history(user_id,game_code,bet,win,profit,multiplier,result) VALUES($1,'mines', $2,1,$3,$4,$5::jsonb)",user_id,s['bet'],profit,mult,json.dumps({'opened':opened,'cashout':payout}))
+            return {'status':'cashed','opened':opened,'multiplier':mult,'payout':payout,'profit':profit}
+
+async def mines_active(user_id:int):
+    db=check_pool(); return await db.fetchrow("SELECT id,bet,size,mines_count,opened,multiplier FROM mines_sessions WHERE user_id=$1 AND status='active' ORDER BY id DESC LIMIT 1",user_id)
 
 # ============================================================
 # PVP

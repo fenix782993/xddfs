@@ -29,6 +29,7 @@ from app.db import (
     create_pvp,
     join_pvp,
     finish_pvp,
+    mines_start, mines_reveal, mines_cashout, mines_active,
 )
 
 from app.games import (
@@ -286,6 +287,8 @@ def calculate_game(game_code: str, bet: int):
         "dice": dice, "darts": darts, "football": football,
         "basketball": basketball, "bowling": bowling, "slots": slots,
         "mines": mines, "crash": crash, "roulette": roulette,
+        "coinflip": coinflip, "highlow": highlow, "rps": rps,
+        "plinko": plinko, "blackjack": blackjack, "race": race,
     }.get(str(game_code).lower())
     if not fn:
         raise ValueError("unknown_game")
@@ -358,6 +361,48 @@ async def api_play(req: PlayRequest):
             detail=str(e),
         )
 
+
+# =========================================================
+# MINES INTERACTIVE
+# =========================================================
+class MinesStartRequest(BaseModel):
+    user_id:int
+    bet:int=Field(gt=0,le=1000000)
+    mines_count:int=Field(default=5,ge=1,le=24)
+
+class MinesRevealRequest(BaseModel):
+    user_id:int
+    session_id:int
+    cell:int=Field(ge=0,le=24)
+
+@app.get('/api/mines/active')
+async def api_mines_active(user_id:int=Query(...)):
+    await require_user(user_id); row=await mines_active(user_id)
+    return {'ok':True,'session':row_to_dict(row) if row else None}
+
+@app.post('/api/mines/start')
+async def api_mines_start(req:MinesStartRequest):
+    user=await require_user(req.user_id); game=await get_game('mines')
+    if req.bet>int(game['max_bet']) or req.bet<int(game['min_bet']): raise HTTPException(400,'Некорректная ставка')
+    try:
+        row=await mines_start(req.user_id,req.bet,5,req.mines_count)
+        return {'ok':True,'session':row_to_dict(row),'mine_positions':None}
+    except ValueError as e: raise HTTPException(400,str(e))
+
+@app.post('/api/mines/reveal')
+async def api_mines_reveal(req:MinesRevealRequest):
+    await require_user(req.user_id)
+    try: return {'ok':True,'result':await mines_reveal(req.user_id,req.session_id if hasattr(req,'session_id') else 0,req.cell)}
+    except ValueError as e: raise HTTPException(400,str(e))
+
+
+@app.post('/api/mines/cashout')
+async def api_mines_cashout(req:UserRequest):
+    await require_user(req.user_id)
+    row=await mines_active(req.user_id)
+    if not row: raise HTTPException(400,'Нет активной игры Mines')
+    try: return {'ok':True,'result':await mines_cashout(req.user_id,row['id'])}
+    except ValueError as e: raise HTTPException(400,str(e))
 
 # =========================================================
 # PVP
@@ -1130,6 +1175,15 @@ button {
     cursor: pointer;
 }
 
+/* REAL GAME STAGE */
+.game-stage{min-height:190px;display:grid;place-items:center;position:relative;overflow:hidden;margin:10px 0 15px;border:1px solid rgba(255,255,255,.07);border-radius:22px;background:radial-gradient(circle at 50% 50%,rgba(255,36,76,.08),transparent 65%),#0b0b11}
+.stage-item{font-size:70px;display:inline-block;filter:drop-shadow(0 12px 20px rgba(0,0,0,.35))}
+.stage-spin{animation:stageSpin .55s linear infinite}.stage-shake{animation:stageShake .11s linear infinite}.stage-pop{animation:stagePop .35s cubic-bezier(.2,1.6,.4,1)}
+.stage-track{position:absolute;left:8%;right:8%;bottom:22px;height:7px;border-radius:9px;background:rgba(255,255,255,.08);overflow:hidden}.stage-progress{height:100%;width:0;background:#ff244c;transition:width .08s linear}
+.stage-grid{display:grid;grid-template-columns:repeat(5,48px);gap:7px}.mine-cell{width:48px;height:48px;border:0;border-radius:10px;background:#1a1a24;color:white;font-size:21px;transition:.18s;box-shadow:inset 0 -3px rgba(0,0,0,.2)}.mine-cell.open{background:#153b31}.mine-cell.mine{background:#5b1728;animation:stagePop .3s}
+.slot-reels{display:flex;gap:9px;font-size:46px}.slot-reel{width:62px;height:70px;display:grid;place-items:center;border-radius:14px;background:#171720;border:1px solid rgba(255,255,255,.08);overflow:hidden}
+.rocket{font-size:65px;position:absolute;bottom:35px;left:12%;transition:transform .05s linear}.crash-line{position:absolute;left:0;bottom:30px;width:100%;height:2px;background:rgba(255,36,76,.25);transform:rotate(-8deg);transform-origin:left}
+@keyframes stageSpin{to{transform:rotate(360deg)}} @keyframes stageShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-7px)}75%{transform:translateX(7px)}} @keyframes stagePop{0%{transform:scale(.3);opacity:.2}70%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
 .game-big {
     text-align: center;
     padding: 25px 0;
@@ -1427,6 +1481,7 @@ button {
                 <option value="football">⚽ Football</option>
                 <option value="basketball">🏀 Basketball</option>
                 <option value="mines">💣 Mines</option>
+                <option value="slots">🎰 Slots</option><option value="roulette">🎡 Roulette</option><option value="plinko">🔴 Plinko</option><option value="race">🏁 Race</option>
             </select>
             <input id="pvpStake" class="bet-input" type="number" value="250" min="10">
         </div>
@@ -1647,21 +1702,10 @@ button {
 
 
         <div class="game-big">
-
-            <div
-                id="modalIcon"
-                class="game-big-icon"
-            >
-                🎮
+            <div id="gameStage" class="game-stage">
+                <div id="stageContent" class="stage-item">🎮</div>
             </div>
-
-            <div
-                id="gameResult"
-                class="game-result"
-            >
-                Сделай ставку
-            </div>
-
+            <div id="gameResult" class="game-result">Сделай ставку</div>
         </div>
 
 
@@ -2082,137 +2126,66 @@ function setBet(value) {
 }
 
 
-async function playCurrentGame() {
-
-    if (!currentGame) {
-        return;
-    }
-
-    const bet =
-        Number(
-            document.getElementById(
-                "bet"
-            ).value
-        );
-
-    if (!bet || bet <= 0) {
-
-        toast(
-            "Введите ставку"
-        );
-
-        return;
-    }
-
-    const button =
-        document.getElementById(
-            "playButton"
-        );
-
-    button.disabled = true;
-    button.textContent =
-        "⏳ ИГРАЕМ...";
-
-    try {
-
-        const data =
-            await api(
-                "/api/play",
-                {
-                    method: "POST",
-                    body: JSON.stringify({
-                        user_id: userId,
-                        game:
-                            currentGame.code,
-                        bet: bet
-                    })
-                }
-            );
-
-        const result =
-            data.result;
-
-        const gameData =
-            data.game_data;
-
-        let text;
-
-        if (result.win) {
-
-            text =
-                "🔥 ПОБЕДА +" +
-                Number(
-                    result.profit
-                ).toLocaleString("ru-RU") +
-                " FC";
-
-            document.getElementById(
-                "gameResult"
-            ).className =
-                "game-result green";
-
-        } else {
-
-            text =
-                "💀 ПРОИГРЫШ " +
-                Number(
-                    result.profit
-                ).toLocaleString("ru-RU") +
-                " FC";
-
-            document.getElementById(
-                "gameResult"
-            ).className =
-                "game-result red";
-        }
-
-        if (
-            gameData &&
-            gameData.display
-        ) {
-
-            text =
-                gameData.display +
-                "<br>" +
-                text;
-        }
-
-        if (
-            gameData &&
-            gameData.emoji
-        ) {
-
-            document.getElementById(
-                "modalIcon"
-            ).textContent =
-                gameData.emoji;
-        }
-
-        document.getElementById(
-            "gameResult"
-        ).innerHTML =
-            text;
-
-        toast(
-            result.win
-                ? "🔥 Победа!"
-                : "💀 Не повезло"
-        );
-
-        await loadUser();
-
-    } catch (e) {
-
-        toast(e.message);
-
-    } finally {
-
-        button.disabled = false;
-        button.textContent =
-            "🔥 ИГРАТЬ";
-    }
+async function animateGame(code, data){
+    const stage=document.getElementById('stageContent');
+    const box=document.getElementById('gameStage');
+    stage.className='stage-item';
+    if(code==='dice'||code==='darts'||code==='bowling'){
+        stage.textContent=code==='dice'?'🎲':code==='darts'?'🎯':'🎳'; stage.classList.add('stage-shake');
+        await new Promise(r=>setTimeout(r,900));
+        stage.textContent=code==='dice'?'🎲 '+data.roll:code==='darts'?'🎯 '+data.value:'🎳 '+data.pins;
+    } else if(code==='slots'){
+        stage.innerHTML='<div class="slot-reels"><div class="slot-reel">🍒</div><div class="slot-reel">⭐</div><div class="slot-reel">💎</div></div>';
+        const reels=stage.querySelectorAll('.slot-reel'); reels.forEach(x=>x.classList.add('stage-shake'));
+        await new Promise(r=>setTimeout(r,1200)); reels.forEach((x,i)=>{x.classList.remove('stage-shake');x.textContent=data.reels?.[i]||'❔';x.classList.add('stage-pop')});
+    } else if(code==='mines'){
+        const size=data.size||5,total=size*size; stage.innerHTML='<div class="stage-grid">'+Array.from({length:total},(_,i)=>`<button class="mine-cell" data-i="${i}">?</button>`).join('')+'</div>';
+        const cells=[...stage.querySelectorAll('.mine-cell')], opened=data.opened||[];
+        for(const i of opened){cells[i].textContent='💎';cells[i].classList.add('open');await new Promise(r=>setTimeout(r,90));}
+        if(data.hit_mine){const mines=data.mine_positions||[]; for(const i of mines){cells[i].textContent='💣';cells[i].classList.add('mine')}}
+    } else if(code==='crash'){
+        stage.innerHTML='<div class="rocket">🚀</div><div class="crash-line"></div><div class="stage-track"><div class="stage-progress"></div></div>';
+        const rocket=stage.querySelector('.rocket'),progress=stage.querySelector('.stage-progress'); const target=data.crash_at||2; const duration=Math.max(1200,Math.min(6500,(target-1)*900)); const t0=performance.now();
+        await new Promise(resolve=>{function tick(t){const q=Math.min(1,(t-t0)/duration);const mult=1+q*(target-1);rocket.style.transform=`translate(${q*240}px,${-q*q*115}px) rotate(${-10-q*25}deg)`;progress.style.width=(q*100)+'%';stage.dataset.mult=mult.toFixed(2)+'x';if(q<1)requestAnimationFrame(tick);else resolve()}requestAnimationFrame(tick)});
+        rocket.classList.add('stage-shake');
+    } else if(code==='roulette'){
+        stage.textContent='🎡'; stage.classList.add('stage-spin'); await new Promise(r=>setTimeout(r,1300)); stage.classList.remove('stage-spin'); stage.classList.add('stage-pop'); stage.textContent='🎡 '+data.number;
+    } else if(code==='football'||code==='basketball'){
+        stage.textContent=code==='football'?'⚽':'🏀';stage.classList.add('stage-shake');await new Promise(r=>setTimeout(r,1000));stage.classList.remove('stage-shake');stage.classList.add('stage-pop');stage.textContent=`${code==='football'?'⚽':'🏀'} ${data.home}:${data.away}`;
+    } else if(code==='plinko'){
+        stage.textContent='🔴'; for(let i=0;i<8;i++){stage.style.transform=`translate(${(i%2?1:-1)*18}px,${(i+1)*8}px)`;await new Promise(r=>setTimeout(r,100));}stage.style.transform='';stage.textContent='🔴 '+(data.multiplier||data.win_amount||0)+'x';
+    } else if(code==='rps'){stage.textContent='✊  VS  ✋';await new Promise(r=>setTimeout(r,900));stage.textContent=`${data.player||'✊'}  VS  ${data.enemy||'✊'}`;}
+    else if(code==='coinflip'){stage.textContent='🪙';stage.classList.add('stage-spin');await new Promise(r=>setTimeout(r,1100));stage.classList.remove('stage-spin');stage.textContent=data.result==='heads'?'🪙 Орёл':'🪙 Решка';}
+    else if(code==='highlow'){stage.textContent='🔢';stage.classList.add('stage-shake');await new Promise(r=>setTimeout(r,900));stage.classList.remove('stage-shake');stage.textContent='🔢 '+data.number;}
+    else if(code==='blackjack'){stage.textContent='🃏';stage.classList.add('stage-shake');await new Promise(r=>setTimeout(r,1000));stage.classList.remove('stage-shake');stage.textContent=`🃏 ${data.player}  vs  ${data.dealer}`;}
+    else if(code==='race'){stage.textContent='🏎️ 🏎️ 🏎️ 🏎️';stage.classList.add('stage-shake');await new Promise(r=>setTimeout(r,1200));stage.classList.remove('stage-shake');stage.textContent='🏆 '+(data.winner||1);}
+    else {stage.textContent=data.display||currentGame?.emoji||'🎮';stage.classList.add('stage-pop');await new Promise(r=>setTimeout(r,700));}
 }
 
+
+async function revealMine(sid,cell,el){
+    try{el.disabled=true;const d=await api('/api/mines/reveal',{method:'POST',body:JSON.stringify({user_id:userId,session_id:sid,cell})});const r=d.result;if(r.safe){el.textContent='💎';el.classList.add('open');document.getElementById('gameResult').textContent='💎 '+r.multiplier.toFixed(2)+'x · '+r.next_payout+' FC';}else{el.textContent='💣';el.classList.add('mine');document.querySelectorAll('.mine-cell').forEach(x=>x.disabled=true);toast('💥 Мина!');document.getElementById('gameResult').textContent='💀 МИНА';await loadUser();}}catch(e){el.disabled=false;toast(e.message)}}
+async function cashoutMines(sid){try{const d=await api('/api/mines/cashout',{method:'POST',body:JSON.stringify({user_id:userId})});document.getElementById('gameResult').innerHTML=`🏆 CASHOUT <span class="green">+${d.result.profit} FC</span>`;document.querySelectorAll('.mine-cell').forEach(x=>x.disabled=true);toast('💰 Забрано '+d.result.payout+' FC');await loadUser();}catch(e){toast(e.message)}}
+
+async function playCurrentGame(){
+    if(!currentGame)return;
+    const bet=Number(document.getElementById('bet').value); if(!bet||bet<=0){toast('Введите ставку');return;}
+    const button=document.getElementById('playButton');button.disabled=true;button.textContent='⏳ ИГРАЕМ...';
+    const resultEl=document.getElementById('gameResult'); resultEl.className='game-result';resultEl.textContent='';
+    try{
+        if(currentGame.code==='mines'){
+            const st=await api('/api/mines/start',{method:'POST',body:JSON.stringify({user_id:userId,bet,mines_count:5})});
+            const sid=st.session.id; const stage=document.getElementById('stageContent');
+            stage.innerHTML='<div class=\"stage-grid\">'+Array.from({length:25},(_,i)=>`<button class=\"mine-cell\" onclick=\"revealMine(${sid},${i},this)\">?</button>`).join('')+'</div><button id=\"cashoutBtn\" class=\"play-btn\" style=\"grid-column:1/-1;margin-top:10px\" onclick=\"cashoutMines(${sid})\">💰 ЗАБРАТЬ</button>';
+            resultEl.innerHTML='💣 Открой клетки'; resultEl.className='game-result'; await loadUser(); return;
+        }
+        const data=await api('/api/play',{method:'POST',body:JSON.stringify({user_id:userId,game:currentGame.code,bet})});
+        await animateGame(currentGame.code,data.game_data||{});
+        const r=data.result||{}; const sign=Number(r.profit)>0?'+':'';
+        resultEl.innerHTML=r.win?`🔥 ПОБЕДА <span class="green">${sign}${Number(r.profit).toLocaleString('ru-RU')} FC</span>`:`💀 ПРОИГРЫШ <span class="red">${Number(r.profit).toLocaleString('ru-RU')} FC</span>`;
+        resultEl.className='game-result '+(r.win?'green':'red'); toast(r.win?'🔥 Победа!':'💀 Раунд завершён'); await loadUser();
+    }catch(e){toast(e.message)}finally{button.disabled=false;button.textContent='🔥 ИГРАТЬ'}
+}
 
 async function loadLeaderboard() {
 
