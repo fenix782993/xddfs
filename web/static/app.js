@@ -1,7 +1,0 @@
-const api=p=>fetch(p).then(r=>r.json()),content=document.getElementById('content');let uid=new URLSearchParams(location.search).get('user_id');
-function card(x){return `<div class="card"><h3>${x}</h3></div>`}
-async function games(){let a=await api('/api/games');content.innerHTML='<h2>🎮 Игры</h2><div class="grid">'+a.map(x=>`<div class="card"><h3>${x.title}</h3><p class="muted">${x.min_bet}–${x.max_bet} 🔥</p><button onclick="alert('Запусти игру через Telegram Bot')">Играть</button></div>`).join('')+'</div>'}
-async function missions(){let a=await api('/api/missions');content.innerHTML='<h2>🎯 Миссии</h2><div class="grid">'+(a.length?a.map(x=>`<div class="card"><h3>${x.title}</h3><p>+${x.reward} 🔥</p></div>`).join(''):card('Активных миссий нет'))+'</div>'}
-async function profile(){if(!uid)return content.innerHTML=card('Открой Mini App из Telegram');let u=await api('/api/profile/'+uid);document.getElementById('balance').textContent=u.balance+' 🔥';content.innerHTML=`<div class="card"><h2>👤 ${u.first_name||'Игрок'}</h2><p>🔥 ${u.balance}</p><p>⭐ Level ${u.level}</p><p>✨ XP ${u.xp}</p><p>🎮 Games ${u.games}</p><p>🏆 Wins ${u.wins}</p><p>👥 Referrals ${u.referrals}</p></div>`}
-async function top(){let a=await api('/api/leaderboard');content.innerHTML='<h2>🏆 Топ</h2>'+a.map((x,i)=>card(`${i+1}. @${x.username||'player'} — ${x.balance} 🔥`)).join('')}
-document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>({games,profile,missions,top}[b.dataset.tab]||games)());games();
