@@ -1,2600 +1,302 @@
-import os
-import random
+import hashlib, hmac, json, math, os, random, time
 from contextlib import asynccontextmanager
 from typing import Optional
+from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from app.config import settings
 from app.db import (
-    init_db,
-    close_db,
-    ensure_user,
-    get_user,
-    get_games,
-    get_game,
-    play_game,
-    get_game_history,
-    get_transactions,
-    leaderboard,
-    get_referrals,
-    get_active_missions,
-    claim_mission,
-    get_shop,
-    get_inventory,
-    get_stats,
-    get_player_stats,
-    check_pool,
-    create_pvp,
-    join_pvp,
-    finish_pvp,
+    init_db, close_db, ensure_user, get_user, get_games, get_game, play_game,
+    get_game_history, get_transactions, leaderboard, get_referrals,
+    get_active_missions, claim_mission, get_shop, get_inventory, get_stats,
+    get_player_stats, create_pvp, join_pvp, finish_pvp,
     mines_start, mines_reveal, mines_cashout, mines_active,
+    is_admin, admin_users, admin_set_game, admin_set_setting, admin_give, admin_take, set_ban,
 )
-
-from app.games import (
-    dice,
-    darts,
-    football,
-    basketball,
-    bowling,
-    slots,
-    mines,
-    crash,
-    roulette,
-    coinflip,
-    highlow,
-    rps,
-    plinko,
-    blackjack,
-    race,
-)
-
-
-# =========================================================
-# APP LIFESPAN
-# =========================================================
+from app.games import play as game_play
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    print("🔥 FENIX COIN ULTRA ONLINE")
+    print('🔥 FENIX COIN ULTRA V3 ONLINE')
     yield
     await close_db()
 
-
-app = FastAPI(
-    title="Fenix Coin Ultra",
-    version="ULTRA",
-    description="Fenix Coin Games Platform",
-    lifespan=lifespan,
-)
-
-
-# =========================================================
-# HELPERS
-# =========================================================
-
-def serialize(value):
-    if hasattr(value, "items"):
-        return {k: serialize(v) for k, v in value.items()}
-
-    if isinstance(value, (list, tuple)):
-        return [serialize(v) for v in value]
-
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-
-    return value
-
-
-def row_to_dict(row):
-    if row is None:
-        return None
-
-    return {
-        key: serialize(row[key])
-        for key in row.keys()
-    }
-
-
-async def require_user(user_id: int):
-    user = await get_user(user_id)
-
-    if not user:
-        raise HTTPException(
-            status_code=404,
-            detail="Пользователь не найден",
-        )
-
-    if user["banned"]:
-        raise HTTPException(
-            status_code=403,
-            detail="Пользователь заблокирован",
-        )
-
-    return user
-
-
-# =========================================================
-# REQUEST MODELS
-# =========================================================
-
-class UserRequest(BaseModel):
-    user_id: int
-
+app = FastAPI(title='Fenix Coin Ultra V3', version='3.0', lifespan=lifespan)
 
 class RegisterRequest(BaseModel):
     user_id: int
-    username: str = ""
-    first_name: str = ""
+    username: str = ''
+    first_name: str = ''
+    last_name: str = ''
     ref: Optional[int] = None
-
-
+    init_data: str = ''
 class PlayRequest(BaseModel):
     user_id: int
     game: str
-    bet: int = Field(gt=0, le=1000000)
-
-
+    bet: int = Field(gt=0, le=1_000_000)
+    options: dict = {}
 class MissionClaimRequest(BaseModel):
     user_id: int
     mission_id: int
-
-
 class ShopBuyRequest(BaseModel):
     user_id: int
     code: str
-
-
 class PVPCreateRequest(BaseModel):
     user_id: int
-    game: str = "dice"
-    stake: int = Field(gt=0, le=1000000)
-
-
+    game: str = 'dice'
+    stake: int = Field(gt=0, le=1_000_000)
 class PVPJoinRequest(BaseModel):
     user_id: int
     match_id: int
+class PVPFinishRequest(BaseModel):
+    user_id: int
+    match_id: int
+class MineStartRequest(BaseModel):
+    user_id: int
+    bet: int = Field(gt=0, le=1_000_000)
+    mines: int = Field(default=5, ge=1, le=24)
+class MineRevealRequest(BaseModel):
+    user_id: int
+    session_id: int
+    cell: int = Field(ge=0, le=24)
+class MineCashoutRequest(BaseModel):
+    user_id: int
+    session_id: int
+class AdminMoneyRequest(BaseModel):
+    admin_id: int
+    user_id: int
+    amount: int = Field(gt=0, le=100_000_000)
+class AdminBanRequest(BaseModel):
+    admin_id: int
+    user_id: int
+    banned: bool
+class AdminGameRequest(BaseModel):
+    admin_id: int
+    code: str
+    enabled: bool
+class AdminSettingRequest(BaseModel):
+    admin_id: int
+    key: str
+    value: str
 
+def serial(v):
+    if isinstance(v, dict): return {k: serial(x) for k,x in v.items()}
+    if isinstance(v, (list,tuple)): return [serial(x) for x in v]
+    if hasattr(v, 'isoformat'): return v.isoformat()
+    return v
 
-# =========================================================
-# HEALTH
-# =========================================================
+def row(v): return None if v is None else {k: serial(v[k]) for k in v.keys()}
 
-@app.get("/")
-async def root():
-    return HTMLResponse(HTML)
+async def require_user(uid:int):
+    u=await get_user(uid)
+    if not u: raise HTTPException(404,'Пользователь не зарегистрирован')
+    if u['banned']: raise HTTPException(403,'Пользователь заблокирован')
+    return u
 
+async def require_admin(uid:int):
+    await require_user(uid)
+    if not await is_admin(uid): raise HTTPException(403,'Доступ только для администратора')
 
-@app.get("/health")
-async def health():
-    return {
-        "ok": True,
-        "service": "Fenix Coin Ultra",
-        "version": "ULTRA",
-        "status": "online",
-    }
-
-
-@app.get("/api")
-async def api_info():
-    return {
-        "ok": True,
-        "service": "Fenix Coin Ultra",
-        "version": "ULTRA",
-        "endpoints": [
-            "/api/user",
-            "/api/games",
-            "/api/play",
-            "/api/history",
-            "/api/leaderboard",
-            "/api/referrals",
-            "/api/missions",
-            "/api/shop",
-            "/api/inventory",
-            "/api/stats",
-        ],
-    }
-
-
-# =========================================================
-# USER
-# =========================================================
-
-@app.post("/api/register")
-async def register(req: RegisterRequest):
-    class TelegramUser:
-        id = req.user_id
-        username = req.username
-        first_name = req.first_name
-        last_name = ""
-
-    row, created = await ensure_user(
-        TelegramUser(),
-        req.ref,
-    )
-
-    return {
-        "ok": True,
-        "created": created,
-        "user": row_to_dict(row),
-    }
-
-
-@app.get("/api/user")
-async def api_user(
-    user_id: int = Query(...),
-):
-    user = await require_user(user_id)
-
-    return {
-        "ok": True,
-        "user": row_to_dict(user),
-    }
-
-
-@app.post("/api/user")
-async def api_user_post(req: UserRequest):
-    user = await require_user(req.user_id)
-
-    return {
-        "ok": True,
-        "user": row_to_dict(user),
-    }
-
-
-# =========================================================
-# GAMES
-# =========================================================
-
-@app.get("/api/games")
-async def api_games():
-    games = await get_games()
-
-    return {
-        "ok": True,
-        "games": [
-            row_to_dict(x)
-            for x in games
-        ],
-    }
-
-
-@app.get("/api/games/{game_code}")
-async def api_game(game_code: str):
-    game = await get_game(game_code)
-
-    if not game:
-        raise HTTPException(
-            status_code=404,
-            detail="Игра не найдена",
-        )
-
-    return {
-        "ok": True,
-        "game": row_to_dict(game),
-    }
-
-
-# =========================================================
-# GAME RESULT ENGINE
-# =========================================================
-
-def calculate_game(game_code: str, bet: int):
-    # Every result is generated server-side. The browser never chooses the outcome.
-    fn = {
-        "dice": dice, "darts": darts, "football": football,
-        "basketball": basketball, "bowling": bowling, "slots": slots,
-        "mines": mines, "crash": crash, "roulette": roulette,
-        "coinflip": coinflip, "highlow": highlow, "rps": rps,
-        "plinko": plinko, "blackjack": blackjack, "race": race,
-    }.get(str(game_code).lower())
-    if not fn:
-        raise ValueError("unknown_game")
-    r = fn(int(bet))
-    return bool(r["win"]), float(r["multiplier"]), r
-
-
-# =========================================================
-# PLAY
-# =========================================================
-
-@app.post("/api/play")
-async def api_play(req: PlayRequest):
-
-    user = await require_user(req.user_id)
-
-    game = await get_game(req.game)
-
-    if not game:
-        raise HTTPException(
-            status_code=404,
-            detail="Игра не найдена",
-        )
-
-    if not game["enabled"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Игра временно отключена",
-        )
-
-    if req.bet < game["min_bet"]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Минимальная ставка: {game['min_bet']} FC",
-        )
-
-    if req.bet > game["max_bet"]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Максимальная ставка: {game['max_bet']} FC",
-        )
-
-    if user["balance"] < req.bet:
-        raise HTTPException(
-            status_code=400,
-            detail="Недостаточно Fenix Coin",
-        )
-
+def telegram_valid(init_data:str, bot_token:str)->bool:
+    if not init_data or not bot_token: return False
     try:
-        win, multiplier, data = calculate_game(req.game, req.bet)
+        vals=dict(parse_qsl(init_data, keep_blank_values=True))
+        received=vals.pop('hash', None)
+        auth_date=int(vals.get('auth_date','0'))
+        if not received or abs(time.time()-auth_date)>86400: return False
+        check='\n'.join(f'{k}={vals[k]}' for k in sorted(vals))
+        secret=hmac.new(b'WebAppData', bot_token.encode(), hashlib.sha256).digest()
+        calc=hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(calc, received)
+    except Exception: return False
 
-        result = await play_game(
-            req.user_id,
-            req.game,
-            req.bet,
-            win,
-            multiplier,
-            data,
-        )
+@app.get('/')
+async def root(): return HTMLResponse(HTML)
+@app.get('/health')
+async def health(): return {'ok':True,'service':'Fenix Coin Ultra','version':'3.0','status':'online'}
+@app.get('/api')
+async def api_info(): return {'ok':True,'version':'3.0','features':['games','mines','crash','pvp','missions','shop','admin','telegram_auth']}
 
-        return {
-            "ok": True,
-            "result": result,
-            "game_data": serialize(data),
-        }
+@app.post('/api/register')
+async def register(req:RegisterRequest):
+    if settings.bot_token and not telegram_valid(req.init_data, settings.bot_token):
+        raise HTTPException(401,'Открой Mini App через Telegram. Telegram initData недействителен.')
+    class TU: pass
+    t=TU(); t.id=req.user_id; t.username=req.username; t.first_name=req.first_name; t.last_name=req.last_name
+    u,created=await ensure_user(t,req.ref)
+    return {'ok':True,'created':created,'user':row(u)}
 
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=str(e),
-        )
+@app.get('/api/user')
+async def api_user(user_id:int=Query(...)): return {'ok':True,'user':row(await require_user(user_id))}
+@app.get('/api/games')
+async def api_games(): return {'ok':True,'games':[row(x) for x in await get_games()]}
+@app.get('/api/games/{code}')
+async def api_game(code:str):
+    g=await get_game(code)
+    if not g: raise HTTPException(404,'Игра не найдена')
+    return {'ok':True,'game':row(g)}
 
-
-# =========================================================
-# MINES INTERACTIVE
-# =========================================================
-class MinesStartRequest(BaseModel):
-    user_id:int
-    bet:int=Field(gt=0,le=1000000)
-    mines_count:int=Field(default=5,ge=1,le=24)
-
-class MinesRevealRequest(BaseModel):
-    user_id:int
-    session_id:int
-    cell:int=Field(ge=0,le=24)
-
-@app.get('/api/mines/active')
-async def api_mines_active(user_id:int=Query(...)):
-    await require_user(user_id); row=await mines_active(user_id)
-    return {'ok':True,'session':row_to_dict(row) if row else None}
-
-@app.post('/api/mines/start')
-async def api_mines_start(req:MinesStartRequest):
-    user=await require_user(req.user_id); game=await get_game('mines')
-    if req.bet>int(game['max_bet']) or req.bet<int(game['min_bet']): raise HTTPException(400,'Некорректная ставка')
-    try:
-        row=await mines_start(req.user_id,req.bet,5,req.mines_count)
-        return {'ok':True,'session':row_to_dict(row),'mine_positions':None}
+@app.post('/api/play')
+async def api_play(req:PlayRequest):
+    u=await require_user(req.user_id); g=await get_game(req.game)
+    if not g: raise HTTPException(404,'Игра не найдена')
+    if not g['enabled']: raise HTTPException(400,'Игра отключена')
+    if req.bet<g['min_bet'] or req.bet>g['max_bet']: raise HTTPException(400,f"Ставка: {g['min_bet']}–{g['max_bet']} FC")
+    if u['balance']<req.bet: raise HTTPException(400,'Недостаточно FC')
+    try: data=game_play(req.game,req.bet,**req.options)
+    except TypeError as e: raise HTTPException(400,f'Некорректные параметры игры: {e}')
     except ValueError as e: raise HTTPException(400,str(e))
+    result=await play_game(req.user_id,req.game,req.bet,data['win_amount'],data.get('multiplier'),data)
+    return {'ok':True,'result':result,'game_data':serial(data)}
 
-@app.post('/api/mines/reveal')
-async def api_mines_reveal(req:MinesRevealRequest):
+@app.get('/api/history')
+async def history(user_id:int=Query(...),limit:int=Query(50,ge=1,le=200)):
+    await require_user(user_id); return {'ok':True,'history':[row(x) for x in await get_game_history(user_id,limit)]}
+@app.get('/api/transactions')
+async def transactions(user_id:int=Query(...),limit:int=Query(50,ge=1,le=200)):
+    await require_user(user_id); return {'ok':True,'transactions':[row(x) for x in await get_transactions(user_id,limit)]}
+@app.get('/api/leaderboard')
+async def lb(limit:int=Query(50,ge=1,le=100)):
+    return {'ok':True,'leaderboard':[dict(row(x),position=i+1) for i,x in enumerate(await leaderboard(limit))]}
+@app.get('/api/referrals')
+async def refs(user_id:int=Query(...)):
+    u=await require_user(user_id); return {'ok':True,'count':u['referrals'],'reward':settings.ref_reward,'referrals':[row(x) for x in await get_referrals(user_id)]}
+@app.get('/api/missions')
+async def missions(): return {'ok':True,'missions':[row(x) for x in await get_active_missions()]}
+@app.post('/api/missions/claim')
+async def mission_claim(req:MissionClaimRequest):
+    await require_user(req.user_id); ok,result=await claim_mission(req.user_id,req.mission_id)
+    if not ok: raise HTTPException(400,str(result))
+    return {'ok':True,'reward':result}
+@app.get('/api/shop')
+async def shop(): return {'ok':True,'items':[row(x) for x in await get_shop()]}
+@app.get('/api/inventory')
+async def inventory(user_id:int=Query(...)):
+    await require_user(user_id); return {'ok':True,'inventory':[row(x) for x in await get_inventory(user_id)]}
+@app.post('/api/shop/buy')
+async def shop_buy(req:ShopBuyRequest):
     await require_user(req.user_id)
-    try: return {'ok':True,'result':await mines_reveal(req.user_id,req.session_id if hasattr(req,'session_id') else 0,req.cell)}
-    except ValueError as e: raise HTTPException(400,str(e))
-
-
-@app.post('/api/mines/cashout')
-async def api_mines_cashout(req:UserRequest):
-    await require_user(req.user_id)
-    row=await mines_active(req.user_id)
-    if not row: raise HTTPException(400,'Нет активной игры Mines')
-    try: return {'ok':True,'result':await mines_cashout(req.user_id,row['id'])}
-    except ValueError as e: raise HTTPException(400,str(e))
-
-# =========================================================
-# PVP
-# =========================================================
-
-@app.get("/api/pvp")
-async def api_pvp_list():
-    db = check_pool()
-    rows = await db.fetch("""
-        SELECT p.*, u.username AS creator_username, u.first_name AS creator_first_name
-        FROM pvp_matches p JOIN users u ON u.id=p.creator_id
-        WHERE p.status='open' ORDER BY p.created_at DESC LIMIT 50
-    """)
-    return {"ok": True, "matches": [row_to_dict(x) for x in rows]}
-
-
-@app.post("/api/pvp/create")
-async def api_pvp_create(req: PVPCreateRequest):
-    await require_user(req.user_id)
-    if not await get_game(req.game):
-        raise HTTPException(404, "Игра не найдена")
-    try:
-        row = await create_pvp(req.user_id, req.stake, req.game)
-        return {"ok": True, "match": row_to_dict(row)}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/pvp/join")
-async def api_pvp_join(req: PVPJoinRequest):
-    await require_user(req.user_id)
-    try:
-        row = await join_pvp(req.match_id, req.user_id)
-        return {"ok": True, "match": row_to_dict(row)}
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/pvp/{match_id}/play")
-async def api_pvp_play(match_id: int, req: UserRequest):
-    await require_user(req.user_id)
-    db = check_pool()
-    match = await db.fetchrow("SELECT * FROM pvp_matches WHERE id=$1 AND status='active'", match_id)
-    if not match:
-        raise HTTPException(404, "Матч не найден или уже завершён")
-    if req.user_id not in (match["creator_id"], match["opponent_id"]):
-        raise HTTPException(403, "Вы не участник матча")
-    # One server-side round per player. Scores are written atomically by finish_pvp.
-    if match["game_code"] == "dice":
-        creator_score=random.randint(1,6); opponent_score=random.randint(1,6)
-    elif match["game_code"] == "darts":
-        creator_score=random.randint(1,6); opponent_score=random.randint(1,6)
-    elif match["game_code"] == "football":
-        creator_score=random.randint(0,5); opponent_score=random.randint(0,5)
-    elif match["game_code"] == "basketball":
-        creator_score=random.randint(70,130); opponent_score=random.randint(70,130)
-    else:
-        creator_score=random.randint(1,100); opponent_score=random.randint(1,100)
-    if creator_score == opponent_score:
-        creator_score += 1
-    winner=match["creator_id"] if creator_score>opponent_score else match["opponent_id"]
-    loser=match["opponent_id"] if winner==match["creator_id"] else match["creator_id"]
-    prize=await finish_pvp(match_id,winner,loser,creator_score,opponent_score)
-    return {"ok":True,"winner_id":winner,"loser_id":loser,"creator_score":creator_score,"opponent_score":opponent_score,"prize":prize}
-
-
-# =========================================================
-# HISTORY
-# =========================================================
-
-@app.get("/api/history")
-async def api_history(
-    user_id: int = Query(...),
-    limit: int = Query(50, ge=1, le=200),
-):
-    await require_user(user_id)
-
-    rows = await get_game_history(
-        user_id,
-        limit,
-    )
-
-    return {
-        "ok": True,
-        "history": [
-            row_to_dict(x)
-            for x in rows
-        ],
-    }
-
-
-@app.get("/api/transactions")
-async def api_transactions(
-    user_id: int = Query(...),
-    limit: int = Query(50, ge=1, le=200),
-):
-    await require_user(user_id)
-
-    rows = await get_transactions(
-        user_id,
-        limit,
-    )
-
-    return {
-        "ok": True,
-        "transactions": [
-            row_to_dict(x)
-            for x in rows
-        ],
-    }
-
-
-# =========================================================
-# LEADERBOARD
-# =========================================================
-
-@app.get("/api/leaderboard")
-async def api_leaderboard(
-    limit: int = Query(100, ge=1, le=100),
-):
-    rows = await leaderboard(limit)
-
-    result = []
-
-    for position, row in enumerate(rows, start=1):
-        item = row_to_dict(row)
-        item["position"] = position
-        result.append(item)
-
-    return {
-        "ok": True,
-        "leaderboard": result,
-    }
-
-
-# =========================================================
-# REFERRALS
-# =========================================================
-
-@app.get("/api/referrals")
-async def api_referrals(
-    user_id: int = Query(...),
-):
-    user = await require_user(user_id)
-
-    rows = await get_referrals(user_id)
-
-    return {
-        "ok": True,
-        "reward": 600,
-        "count": user["referrals"],
-        "referrals": [
-            row_to_dict(x)
-            for x in rows
-        ],
-    }
-
-
-# =========================================================
-# MISSIONS
-# =========================================================
-
-@app.get("/api/missions")
-async def api_missions():
-    rows = await get_active_missions()
-
-    return {
-        "ok": True,
-        "missions": [
-            row_to_dict(x)
-            for x in rows
-        ],
-    }
-
-
-@app.post("/api/missions/claim")
-async def api_claim_mission(
-    req: MissionClaimRequest,
-):
-    await require_user(req.user_id)
-
-    try:
-        reward = await claim_mission(req.user_id, req.mission_id)
-        return {"ok": True, "reward": reward}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# =========================================================
-# SHOP
-# =========================================================
-
-@app.get("/api/shop")
-async def api_shop():
-    rows = await get_shop()
-
-    return {
-        "ok": True,
-        "items": [
-            row_to_dict(x)
-            for x in rows
-        ],
-    }
-
-
-@app.get("/api/inventory")
-async def api_inventory(
-    user_id: int = Query(...),
-):
-    await require_user(user_id)
-
-    rows = await get_inventory(user_id)
-
-    return {
-        "ok": True,
-        "inventory": [
-            row_to_dict(x)
-            for x in rows
-        ],
-    }
-
-
-@app.post("/api/shop/buy")
-async def api_shop_buy(
-    req: ShopBuyRequest,
-):
-    await require_user(req.user_id)
-
     from app.db import buy_item
-
-    success, result = await buy_item(
-        req.user_id,
-        req.code,
-    )
-
-    if not success:
-        raise HTTPException(
-            status_code=400,
-            detail=result,
-        )
-
-    return {
-        "ok": True,
-        "item": row_to_dict(result),
-    }
-
-
-# =========================================================
-# STATS
-# =========================================================
-
-@app.get("/api/stats")
-async def api_stats():
-    stats = await get_stats()
-
-    return {
-        "ok": True,
-        "stats": stats,
-    }
-
-
-@app.get("/api/player/stats")
-async def api_player_stats(
-    user_id: int = Query(...),
-):
-    await require_user(user_id)
-
-    stats = await get_player_stats(user_id)
-
-    return {
-        "ok": True,
-        "stats": row_to_dict(stats),
-    }
-
-
-# =========================================================
-# BEAUTIFUL WEB UI
-# =========================================================
-
-HTML = r"""
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-
-<meta charset="UTF-8">
-<meta
-    name="viewport"
-    content="width=device-width,
-    initial-scale=1,
-    maximum-scale=1,
-    user-scalable=no"
->
-
-<title>Fenix Coin Ultra</title>
-
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-
-<style>
-
-* {
-    box-sizing: border-box;
-    -webkit-tap-highlight-color: transparent;
-}
-
-:root {
-    --bg: #07070b;
-    --panel: #101016;
-    --panel2: #16161f;
-    --border: rgba(255,255,255,.08);
-    --text: #ffffff;
-    --muted: #8d8d9d;
-    --red: #ff244c;
-    --red2: #ff526f;
-    --gold: #ffd45c;
-    --green: #32e69b;
-    --blue: #5a8cff;
-}
-
-body {
-    margin: 0;
-    min-height: 100vh;
-    color: var(--text);
-    background:
-        radial-gradient(
-            circle at 50% -10%,
-            rgba(255,30,70,.25),
-            transparent 40%
-        ),
-        radial-gradient(
-            circle at 100% 30%,
-            rgba(90,70,255,.12),
-            transparent 35%
-        ),
-        var(--bg);
-
-    font-family:
-        Inter,
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        sans-serif;
-}
-
-button {
-    font: inherit;
-}
-
-.app {
-    width: 100%;
-    max-width: 620px;
-    min-height: 100vh;
-    margin: auto;
-    padding-bottom: 100px;
-}
-
-.header {
-    position: sticky;
-    top: 0;
-    z-index: 20;
-
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-
-    padding: 18px 18px 14px;
-
-    background:
-        linear-gradient(
-            180deg,
-            rgba(7,7,11,.97),
-            rgba(7,7,11,.78)
-        );
-
-    backdrop-filter: blur(18px);
-}
-
-.logo {
-    display: flex;
-    align-items: center;
-    gap: 11px;
-}
-
-.logo-icon {
-    width: 42px;
-    height: 42px;
-
-    display: grid;
-    place-items: center;
-
-    border-radius: 14px;
-
-    background:
-        linear-gradient(
-            135deg,
-            #ff173f,
-            #8f102e
-        );
-
-    box-shadow:
-        0 0 30px rgba(255,20,60,.28);
-
-    font-size: 22px;
-}
-
-.logo-title {
-    font-size: 17px;
-    font-weight: 900;
-    letter-spacing: .5px;
-}
-
-.logo-sub {
-    color: var(--muted);
-    font-size: 11px;
-    margin-top: 2px;
-}
-
-.balance {
-    padding: 9px 13px;
-
-    border: 1px solid rgba(255,210,80,.15);
-    border-radius: 13px;
-
-    background: rgba(255,210,80,.07);
-
-    color: var(--gold);
-    font-size: 13px;
-    font-weight: 800;
-}
-
-.content {
-    padding: 10px 16px;
-}
-
-.hero {
-    position: relative;
-    overflow: hidden;
-
-    margin: 8px 0 16px;
-    padding: 24px;
-
-    border-radius: 26px;
-
-    background:
-        linear-gradient(
-            135deg,
-            rgba(255,25,65,.25),
-            rgba(120,20,50,.09)
-        );
-
-    border: 1px solid rgba(255,40,80,.16);
-
-    box-shadow:
-        inset 0 1px rgba(255,255,255,.05),
-        0 20px 60px rgba(0,0,0,.25);
-}
-
-.hero:after {
-    content: "🔥";
-    position: absolute;
-    right: -10px;
-    bottom: -28px;
-    font-size: 125px;
-    opacity: .10;
-    transform: rotate(-15deg);
-}
-
-.hero-label {
-    color: var(--red2);
-    font-size: 12px;
-    font-weight: 900;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-}
-
-.hero h1 {
-    margin: 7px 0;
-    font-size: 29px;
-    line-height: 1.05;
-}
-
-.hero p {
-    margin: 0;
-    color: #b6b6c4;
-    font-size: 13px;
-    line-height: 1.5;
-}
-
-.section-title {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-
-    margin: 22px 2px 11px;
-
-    font-size: 17px;
-    font-weight: 900;
-}
-
-.section-title span {
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 600;
-}
-
-.games {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 10px;
-}
-
-.game {
-    position: relative;
-    overflow: hidden;
-
-    min-height: 128px;
-    padding: 16px;
-
-    border: 1px solid var(--border);
-    border-radius: 20px;
-
-    background:
-        linear-gradient(
-            145deg,
-            rgba(255,255,255,.055),
-            rgba(255,255,255,.015)
-        );
-
-    color: white;
-    text-align: left;
-
-    cursor: pointer;
-
-    transition:
-        transform .16s,
-        border-color .16s,
-        background .16s;
-}
-
-.game:hover {
-    border-color: rgba(255,40,80,.3);
-    background: rgba(255,40,80,.07);
-}
-
-.game:active {
-    transform: scale(.97);
-}
-
-.game-icon {
-    font-size: 34px;
-    margin-bottom: 11px;
-}
-
-.game-name {
-    font-size: 15px;
-    font-weight: 900;
-}
-
-.game-desc {
-    margin-top: 4px;
-    color: var(--muted);
-    font-size: 10px;
-}
-
-.card {
-    padding: 17px;
-
-    border: 1px solid var(--border);
-    border-radius: 20px;
-
-    background: rgba(255,255,255,.035);
-}
-
-.profile {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-}
-
-.avatar {
-    width: 58px;
-    height: 58px;
-
-    display: grid;
-    place-items: center;
-
-    border-radius: 18px;
-
-    background:
-        linear-gradient(
-            135deg,
-            #ff1f47,
-            #7d1732
-        );
-
-    font-size: 25px;
-    font-weight: 900;
-}
-
-.profile-name {
-    font-size: 18px;
-    font-weight: 900;
-}
-
-.profile-id {
-    margin-top: 3px;
-    color: var(--muted);
-    font-size: 11px;
-}
-
-.stats {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-    margin-top: 14px;
-}
-
-.stat {
-    padding: 13px 8px;
-    text-align: center;
-
-    border-radius: 15px;
-    background: rgba(255,255,255,.04);
-}
-
-.stat-value {
-    font-size: 17px;
-    font-weight: 900;
-}
-
-.stat-label {
-    margin-top: 3px;
-    color: var(--muted);
-    font-size: 9px;
-}
-
-.nav {
-    position: fixed;
-    z-index: 50;
-
-    left: 50%;
-    bottom: 12px;
-
-    transform: translateX(-50%);
-
-    width: min(590px, calc(100% - 24px));
-
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 5px;
-
-    padding: 8px;
-
-    border:
-        1px solid rgba(255,255,255,.08);
-
-    border-radius: 23px;
-
-    background:
-        rgba(14,14,21,.91);
-
-    backdrop-filter: blur(25px);
-
-    box-shadow:
-        0 20px 70px rgba(0,0,0,.6);
-}
-
-.nav button {
-    border: 0;
-    border-radius: 17px;
-
-    padding: 9px 4px;
-
-    background: transparent;
-    color: #777784;
-
-    cursor: pointer;
-}
-
-.nav button.active {
-    background: rgba(255,30,65,.12);
-    color: #ff4262;
-}
-
-.nav-icon {
-    display: block;
-    font-size: 18px;
-}
-
-.nav-text {
-    display: block;
-    margin-top: 3px;
-    font-size: 9px;
-    font-weight: 700;
-}
-
-.page {
-    display: none;
-}
-
-.page.active {
-    display: block;
-}
-
-.modal {
-    position: fixed;
-    inset: 0;
-    z-index: 100;
-
-    display: none;
-    align-items: flex-end;
-
-    background: rgba(0,0,0,.72);
-    backdrop-filter: blur(8px);
-}
-
-.modal.show {
-    display: flex;
-}
-
-.modal-box {
-    width: 100%;
-    max-width: 620px;
-    margin: auto;
-
-    padding: 22px;
-
-    border:
-        1px solid rgba(255,255,255,.08);
-
-    border-radius: 28px 28px 0 0;
-
-    background:
-        linear-gradient(
-            180deg,
-            #171720,
-            #0b0b10
-        );
-
-    box-shadow:
-        0 -20px 80px rgba(0,0,0,.5);
-
-    animation: up .2s ease;
-}
-
-@keyframes up {
-    from {
-        transform: translateY(100%);
-    }
-    to {
-        transform: translateY(0);
-    }
-}
-
-.modal-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.close {
-    width: 36px;
-    height: 36px;
-
-    border: 0;
-    border-radius: 12px;
-
-    background: rgba(255,255,255,.07);
-    color: white;
-
-    cursor: pointer;
-}
-
-/* REAL GAME STAGE */
-.game-stage{min-height:190px;display:grid;place-items:center;position:relative;overflow:hidden;margin:10px 0 15px;border:1px solid rgba(255,255,255,.07);border-radius:22px;background:radial-gradient(circle at 50% 50%,rgba(255,36,76,.08),transparent 65%),#0b0b11}
-.stage-item{font-size:70px;display:inline-block;filter:drop-shadow(0 12px 20px rgba(0,0,0,.35))}
-.stage-spin{animation:stageSpin .55s linear infinite}.stage-shake{animation:stageShake .11s linear infinite}.stage-pop{animation:stagePop .35s cubic-bezier(.2,1.6,.4,1)}
-.stage-track{position:absolute;left:8%;right:8%;bottom:22px;height:7px;border-radius:9px;background:rgba(255,255,255,.08);overflow:hidden}.stage-progress{height:100%;width:0;background:#ff244c;transition:width .08s linear}
-.stage-grid{display:grid;grid-template-columns:repeat(5,48px);gap:7px}.mine-cell{width:48px;height:48px;border:0;border-radius:10px;background:#1a1a24;color:white;font-size:21px;transition:.18s;box-shadow:inset 0 -3px rgba(0,0,0,.2)}.mine-cell.open{background:#153b31}.mine-cell.mine{background:#5b1728;animation:stagePop .3s}
-.slot-reels{display:flex;gap:9px;font-size:46px}.slot-reel{width:62px;height:70px;display:grid;place-items:center;border-radius:14px;background:#171720;border:1px solid rgba(255,255,255,.08);overflow:hidden}
-.rocket{font-size:65px;position:absolute;bottom:35px;left:12%;transition:transform .05s linear}.crash-line{position:absolute;left:0;bottom:30px;width:100%;height:2px;background:rgba(255,36,76,.25);transform:rotate(-8deg);transform-origin:left}
-@keyframes stageSpin{to{transform:rotate(360deg)}} @keyframes stageShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-7px)}75%{transform:translateX(7px)}} @keyframes stagePop{0%{transform:scale(.3);opacity:.2}70%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
-.game-big {
-    text-align: center;
-    padding: 25px 0;
-}
-
-.game-big-icon {
-    font-size: 75px;
-}
-
-.game-result {
-    margin-top: 10px;
-
-    font-size: 26px;
-    font-weight: 1000;
-}
-
-.bet-row {
-    display: flex;
-    gap: 8px;
-    margin-top: 14px;
-}
-
-.bet-input {
-    flex: 1;
-
-    width: 100%;
-
-    padding: 15px;
-
-    border: 1px solid rgba(255,255,255,.09);
-    border-radius: 15px;
-
-    outline: none;
-
-    background: rgba(255,255,255,.05);
-    color: white;
-
-    font-size: 16px;
-    font-weight: 800;
-}
-
-.play-btn {
-    width: 100%;
-
-    margin-top: 10px;
-    padding: 16px;
-
-    border: 0;
-    border-radius: 16px;
-
-    background:
-        linear-gradient(
-            135deg,
-            #ff1f48,
-            #bd1438
-        );
-
-    color: white;
-
-    font-weight: 900;
-    cursor: pointer;
-
-    box-shadow:
-        0 12px 35px rgba(255,30,65,.2);
-}
-
-.quick-bets {
-    display: grid;
-    grid-template-columns: repeat(4,1fr);
-    gap: 7px;
-    margin-top: 9px;
-}
-
-.quick-bets button {
-    padding: 9px 4px;
-
-    border: 1px solid var(--border);
-    border-radius: 11px;
-
-    background: rgba(255,255,255,.04);
-    color: #bbb;
-
-    cursor: pointer;
-    font-size: 11px;
-}
-
-.list {
-    display: grid;
-    gap: 8px;
-}
-
-.list-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-
-    padding: 14px;
-
-    border: 1px solid var(--border);
-    border-radius: 15px;
-
-    background: rgba(255,255,255,.035);
-}
-
-.rank {
-    width: 35px;
-    height: 35px;
-
-    display: grid;
-    place-items: center;
-
-    border-radius: 11px;
-
-    background: rgba(255,255,255,.06);
-
-    font-weight: 900;
-}
-
-.row-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.muted {
-    color: var(--muted);
-}
-
-.coin {
-    color: var(--gold);
-    font-weight: 900;
-}
-
-.green {
-    color: var(--green);
-}
-
-.red {
-    color: var(--red2);
-}
-
-.ref-box {
-    text-align: center;
-}
-
-.ref-code {
-    margin: 15px 0;
-
-    padding: 14px;
-
-    border-radius: 15px;
-
-    background: rgba(255,255,255,.05);
-
-    font-family: monospace;
-    word-break: break-all;
-}
-
-.copy-btn {
-    width: 100%;
-
-    padding: 14px;
-
-    border: 0;
-    border-radius: 15px;
-
-    background: rgba(255,255,255,.08);
-    color: white;
-
-    font-weight: 800;
-}
-
-.loading {
-    padding: 30px;
-    text-align: center;
-    color: var(--muted);
-}
-
-.toast {
-    position: fixed;
-    z-index: 200;
-
-    left: 50%;
-    top: 20px;
-
-    transform: translateX(-50%) translateY(-20px);
-
-    padding: 12px 18px;
-
-    border-radius: 14px;
-
-    background: #20202a;
-    border: 1px solid rgba(255,255,255,.1);
-
-    opacity: 0;
-    pointer-events: none;
-
-    transition: .2s;
-
-    font-size: 12px;
-    font-weight: 800;
-}
-
-.toast.show {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-}
-
-.empty {
-    padding: 30px 10px;
-    text-align: center;
-    color: var(--muted);
-}
-
-</style>
-
-</head>
-
-<body>
-
-<div class="app">
-
-<header class="header">
-
-    <div class="logo">
-
-        <div class="logo-icon">
-            🔥
-        </div>
-
-        <div>
-            <div class="logo-title">
-                FENIX COIN
-            </div>
-
-            <div class="logo-sub">
-                ULTRA GAME PLATFORM
-            </div>
-        </div>
-
-    </div>
-
-    <div class="balance">
-        💰 <span id="topBalance">0</span>
-    </div>
-
-</header>
-
-
-<main class="content">
-
-
-<!-- HOME -->
-
-<section
-    id="page-home"
-    class="page active"
->
-
-    <div class="hero">
-
-        <div class="hero-label">
-            FENIX COIN ULTRA
-        </div>
-
-        <h1>
-            Играй.<br>
-            Побеждай. 🔥
-        </h1>
-
-        <p>
-            PvP, PvE, мини-игры, рейтинг,
-            миссии и реферальная система.
-        </p>
-
-    </div>
-
-
-    <div class="section-title">
-        Игры
-        <span>REAL GAMEPLAY</span>
-    </div>
-
-    <div
-        id="games"
-        class="games"
-    ></div>
-
-    <div class="section-title">👥 PvP <span>ИГРАЙ ПРОТИВ ИГРОКОВ</span></div>
-    <div class="card">
-        <div class="bet-row">
-            <select id="pvpGame" class="bet-input">
-                <option value="dice">🎲 Dice</option>
-                <option value="darts">🎯 Darts</option>
-                <option value="football">⚽ Football</option>
-                <option value="basketball">🏀 Basketball</option>
-                <option value="mines">💣 Mines</option>
-                <option value="slots">🎰 Slots</option><option value="roulette">🎡 Roulette</option><option value="plinko">🔴 Plinko</option><option value="race">🏁 Race</option>
-            </select>
-            <input id="pvpStake" class="bet-input" type="number" value="250" min="10">
-        </div>
-        <button class="play-btn" onclick="createPvp()">⚔️ СОЗДАТЬ МАТЧ</button>
-        <div id="pvpList" class="list" style="margin-top:10px"></div>
-    </div>
-
-</section>
-
-
-<!-- PROFILE -->
-
-<section
-    id="page-profile"
-    class="page"
->
-
-    <div class="section-title">
-        Профиль
-    </div>
-
-    <div
-        id="profile"
-        class="card"
-    >
-        <div class="loading">
-            Загрузка...
-        </div>
-    </div>
-
-</section>
-
-
-<!-- RATING -->
-
-<section
-    id="page-rating"
-    class="page"
->
-
-    <div class="section-title">
-        🏆 Рейтинг
-        <span>TOP PLAYERS</span>
-    </div>
-
-    <div
-        id="leaderboard"
-        class="list"
-    ></div>
-
-</section>
-
-
-<!-- REFERRALS -->
-
-<section
-    id="page-referrals"
-    class="page"
->
-
-    <div class="section-title">
-        👥 Рефералы
-    </div>
-
-    <div class="card ref-box">
-
-        <div style="font-size:45px">
-            🎁
-        </div>
-
-        <h2>
-            Приглашай друзей
-        </h2>
-
-        <p class="muted">
-            Получай
-            <b class="coin">600 FC</b>
-            за каждого приглашённого игрока.
-        </p>
-
-        <div
-            id="refLink"
-            class="ref-code"
-        >
-            —
-        </div>
-
-        <button
-            class="copy-btn"
-            onclick="copyReferral()"
-        >
-            📋 Скопировать ссылку
-        </button>
-
-        <div
-            style="
-                margin-top:15px;
-                color:#ffd45c;
-                font-weight:900
-            "
-        >
-            Приглашено:
-            <span id="refCount">0</span>
-        </div>
-
-    </div>
-
-</section>
-
-
-<!-- MISSIONS -->
-
-<section
-    id="page-missions"
-    class="page"
->
-
-    <div class="section-title">
-        🎯 Миссии
-        <span>REWARDS</span>
-    </div>
-
-    <div
-        id="missions"
-        class="list"
-    ></div>
-
-</section>
-
-
-</main>
-
-
-<!-- NAVIGATION -->
-
-<nav class="nav">
-
-    <button
-        class="active"
-        onclick="showPage('home', this)"
-    >
-        <span class="nav-icon">🏠</span>
-        <span class="nav-text">Главная</span>
-    </button>
-
-    <button
-        onclick="showPage('profile', this)"
-    >
-        <span class="nav-icon">👤</span>
-        <span class="nav-text">Профиль</span>
-    </button>
-
-    <button
-        onclick="showPage('rating', this)"
-    >
-        <span class="nav-icon">🏆</span>
-        <span class="nav-text">Рейтинг</span>
-    </button>
-
-    <button
-        onclick="showPage('referrals', this)"
-    >
-        <span class="nav-icon">👥</span>
-        <span class="nav-text">Рефы</span>
-    </button>
-
-    <button
-        onclick="showPage('missions', this)"
-    >
-        <span class="nav-icon">🎯</span>
-        <span class="nav-text">Миссии</span>
-    </button>
-
-</nav>
-
-
-<!-- GAME MODAL -->
-
-<div
-    id="gameModal"
-    class="modal"
-    onclick="
-        if(event.target === this)
-        closeGame()
-    "
->
-
-    <div class="modal-box">
-
-        <div class="modal-head">
-
-            <div>
-                <div
-                    id="modalGameName"
-                    style="
-                        font-size:20px;
-                        font-weight:900
-                    "
-                >
-                    Игра
-                </div>
-
-                <div
-                    id="modalGameDesc"
-                    class="muted"
-                    style="font-size:11px"
-                ></div>
-            </div>
-
-            <button
-                class="close"
-                onclick="closeGame()"
-            >
-                ✕
-            </button>
-
-        </div>
-
-
-        <div class="game-big">
-            <div id="gameStage" class="game-stage">
-                <div id="stageContent" class="stage-item">🎮</div>
-            </div>
-            <div id="gameResult" class="game-result">Сделай ставку</div>
-        </div>
-
-
-        <div class="muted">
-            Ставка в Fenix Coin
-        </div>
-
-        <div class="bet-row">
-
-            <input
-                id="bet"
-                class="bet-input"
-                type="number"
-                value="250"
-                min="1"
-            >
-
-        </div>
-
-
-        <div class="quick-bets">
-
-            <button onclick="setBet(100)">
-                100
-            </button>
-
-            <button onclick="setBet(250)">
-                250
-            </button>
-
-            <button onclick="setBet(500)">
-                500
-            </button>
-
-            <button onclick="setBet(1000)">
-                1000
-            </button>
-
-        </div>
-
-
-        <button
-            id="playButton"
-            class="play-btn"
-            onclick="playCurrentGame()"
-        >
-            🔥 ИГРАТЬ
-        </button>
-
-    </div>
-
-</div>
-
-
-<div
-    id="toast"
-    class="toast"
-></div>
-
-</div>
-
-
-<script>
-
-const tg =
-    window.Telegram &&
-    window.Telegram.WebApp
-        ? window.Telegram.WebApp
-        : null;
-
-if (tg) {
-    tg.ready();
-    tg.expand();
-}
-
-
-let userId = 0;
-let currentGame = null;
-let gamesCache = [];
-
-
-function getTelegramUser() {
-
-    if (
-        tg &&
-        tg.initDataUnsafe &&
-        tg.initDataUnsafe.user
-    ) {
-        return tg.initDataUnsafe.user;
-    }
-
-    /*
-        Для тестирования через браузер.
-
-        После открытия Mini App Telegram
-        этот ID будет заменён реальным.
-    */
-
-    return {
-        id: 1,
-        username: "demo",
-        first_name: "Fenix"
-    };
-}
-
-
-async function api(
-    url,
-    options = {}
-) {
-
-    const response =
-        await fetch(url, {
-            headers: {
-                "Content-Type":
-                    "application/json"
-            },
-            ...options
-        });
-
-    const data =
-        await response.json();
-
-    if (!response.ok) {
-        throw new Error(
-            data.detail ||
-            "Ошибка API"
-        );
-    }
-
-    return data;
-}
-
-
-function toast(message) {
-
-    const el =
-        document.getElementById("toast");
-
-    el.textContent = message;
-
-    el.classList.add("show");
-
-    setTimeout(() => {
-        el.classList.remove("show");
-    }, 2200);
-}
-
-
-async function registerUser() {
-
-    const u =
-        getTelegramUser();
-
-    userId = u.id;
-
-    try {
-
-        await api(
-            "/api/register",
-            {
-                method: "POST",
-                body: JSON.stringify({
-                    user_id: u.id,
-                    username:
-                        u.username || "",
-                    first_name:
-                        u.first_name || ""
-                })
-            }
-        );
-
-    } catch (e) {
-
-        console.error(e);
-
-    }
-}
-
-
-async function loadUser() {
-
-    try {
-
-        const data =
-            await api(
-                "/api/user?user_id=" +
-                userId
-            );
-
-        const user =
-            data.user;
-
-        document.getElementById(
-            "topBalance"
-        ).textContent =
-            Number(
-                user.balance
-            ).toLocaleString("ru-RU");
-
-        document.getElementById(
-            "profile"
-        ).innerHTML = `
-
-            <div class="profile">
-
-                <div class="avatar">
-                    ${
-                        (
-                            user.first_name ||
-                            "F"
-                        )[0].toUpperCase()
-                    }
-                </div>
-
-                <div>
-
-                    <div class="profile-name">
-                        ${
-                            user.first_name ||
-                            user.username ||
-                            "Игрок"
-                        }
-                    </div>
-
-                    <div class="profile-id">
-                        ID: ${user.id}
-                    </div>
-
-                </div>
-
-            </div>
-
-            <div class="stats">
-
-                <div class="stat">
-                    <div class="stat-value">
-                        ${user.games}
-                    </div>
-                    <div class="stat-label">
-                        ИГР
-                    </div>
-                </div>
-
-                <div class="stat">
-                    <div class="stat-value">
-                        ${user.wins}
-                    </div>
-                    <div class="stat-label">
-                        ПОБЕД
-                    </div>
-                </div>
-
-                <div class="stat">
-                    <div class="stat-value">
-                        ${user.level}
-                    </div>
-                    <div class="stat-label">
-                        LEVEL
-                    </div>
-                </div>
-
-            </div>
-
-            <div
-                style="
-                    margin-top:14px;
-                    padding:15px;
-                    border-radius:15px;
-                    background:rgba(255,210,80,.06)
-                "
-            >
-
-                <div class="muted">
-                    Fenix Coin
-                </div>
-
-                <div
-                    style="
-                        margin-top:4px;
-                        color:#ffd45c;
-                        font-size:25px;
-                        font-weight:1000
-                    "
-                >
-                    💰
-                    ${Number(user.balance)
-                        .toLocaleString("ru-RU")}
-                    FC
-                </div>
-
-            </div>
-        `;
-
-    } catch (e) {
-
-        toast(e.message);
-
-    }
-}
-
-
-async function loadGames() {
-
-    try {
-
-        const data =
-            await api(
-                "/api/games"
-            );
-
-        gamesCache =
-            data.games;
-
-        const container =
-            document.getElementById(
-                "games"
-            );
-
-        container.innerHTML =
-            gamesCache.map(game => {
-
-                return `
-
-                    <button
-                        class="game"
-                        onclick="
-                            openGame(
-                                '${game.code}'
-                            )
-                        "
-                    >
-
-                        <div class="game-icon">
-                            ${game.emoji}
-                        </div>
-
-                        <div class="game-name">
-                            ${game.title}
-                        </div>
-
-                        <div class="game-desc">
-                            ${game.description}
-                        </div>
-
-                    </button>
-
-                `;
-
-            }).join("");
-
-    } catch (e) {
-
-        toast(e.message);
-
-    }
-}
-
-
-function openGame(code) {
-
-    currentGame =
-        gamesCache.find(
-            x => x.code === code
-        );
-
-    if (!currentGame) {
-        return;
-    }
-
-    document.getElementById(
-        "modalGameName"
-    ).textContent =
-        currentGame.title;
-
-    document.getElementById(
-        "modalGameDesc"
-    ).textContent =
-        currentGame.description;
-
-    document.getElementById(
-        "modalIcon"
-    ).textContent =
-        currentGame.emoji;
-
-    document.getElementById(
-        "gameResult"
-    ).textContent =
-        "Сделай ставку";
-
-    document.getElementById(
-        "bet"
-    ).value =
-        Math.max(
-            currentGame.min_bet,
-            250
-        );
-
-    document.getElementById(
-        "gameModal"
-    ).classList.add("show");
-}
-
-
-function closeGame() {
-
-    document.getElementById(
-        "gameModal"
-    ).classList.remove("show");
-}
-
-
-function setBet(value) {
-
-    document.getElementById(
-        "bet"
-    ).value = value;
-}
-
-
-async function animateGame(code, data){
-    const stage=document.getElementById('stageContent');
-    const box=document.getElementById('gameStage');
-    stage.className='stage-item';
-    if(code==='dice'||code==='darts'||code==='bowling'){
-        stage.textContent=code==='dice'?'🎲':code==='darts'?'🎯':'🎳'; stage.classList.add('stage-shake');
-        await new Promise(r=>setTimeout(r,900));
-        stage.textContent=code==='dice'?'🎲 '+data.roll:code==='darts'?'🎯 '+data.value:'🎳 '+data.pins;
-    } else if(code==='slots'){
-        stage.innerHTML='<div class="slot-reels"><div class="slot-reel">🍒</div><div class="slot-reel">⭐</div><div class="slot-reel">💎</div></div>';
-        const reels=stage.querySelectorAll('.slot-reel'); reels.forEach(x=>x.classList.add('stage-shake'));
-        await new Promise(r=>setTimeout(r,1200)); reels.forEach((x,i)=>{x.classList.remove('stage-shake');x.textContent=data.reels?.[i]||'❔';x.classList.add('stage-pop')});
-    } else if(code==='mines'){
-        const size=data.size||5,total=size*size; stage.innerHTML='<div class="stage-grid">'+Array.from({length:total},(_,i)=>`<button class="mine-cell" data-i="${i}">?</button>`).join('')+'</div>';
-        const cells=[...stage.querySelectorAll('.mine-cell')], opened=data.opened||[];
-        for(const i of opened){cells[i].textContent='💎';cells[i].classList.add('open');await new Promise(r=>setTimeout(r,90));}
-        if(data.hit_mine){const mines=data.mine_positions||[]; for(const i of mines){cells[i].textContent='💣';cells[i].classList.add('mine')}}
-    } else if(code==='crash'){
-        stage.innerHTML='<div class="rocket">🚀</div><div class="crash-line"></div><div class="stage-track"><div class="stage-progress"></div></div>';
-        const rocket=stage.querySelector('.rocket'),progress=stage.querySelector('.stage-progress'); const target=data.crash_at||2; const duration=Math.max(1200,Math.min(6500,(target-1)*900)); const t0=performance.now();
-        await new Promise(resolve=>{function tick(t){const q=Math.min(1,(t-t0)/duration);const mult=1+q*(target-1);rocket.style.transform=`translate(${q*240}px,${-q*q*115}px) rotate(${-10-q*25}deg)`;progress.style.width=(q*100)+'%';stage.dataset.mult=mult.toFixed(2)+'x';if(q<1)requestAnimationFrame(tick);else resolve()}requestAnimationFrame(tick)});
-        rocket.classList.add('stage-shake');
-    } else if(code==='roulette'){
-        stage.textContent='🎡'; stage.classList.add('stage-spin'); await new Promise(r=>setTimeout(r,1300)); stage.classList.remove('stage-spin'); stage.classList.add('stage-pop'); stage.textContent='🎡 '+data.number;
-    } else if(code==='football'||code==='basketball'){
-        stage.textContent=code==='football'?'⚽':'🏀';stage.classList.add('stage-shake');await new Promise(r=>setTimeout(r,1000));stage.classList.remove('stage-shake');stage.classList.add('stage-pop');stage.textContent=`${code==='football'?'⚽':'🏀'} ${data.home}:${data.away}`;
-    } else if(code==='plinko'){
-        stage.textContent='🔴'; for(let i=0;i<8;i++){stage.style.transform=`translate(${(i%2?1:-1)*18}px,${(i+1)*8}px)`;await new Promise(r=>setTimeout(r,100));}stage.style.transform='';stage.textContent='🔴 '+(data.multiplier||data.win_amount||0)+'x';
-    } else if(code==='rps'){stage.textContent='✊  VS  ✋';await new Promise(r=>setTimeout(r,900));stage.textContent=`${data.player||'✊'}  VS  ${data.enemy||'✊'}`;}
-    else if(code==='coinflip'){stage.textContent='🪙';stage.classList.add('stage-spin');await new Promise(r=>setTimeout(r,1100));stage.classList.remove('stage-spin');stage.textContent=data.result==='heads'?'🪙 Орёл':'🪙 Решка';}
-    else if(code==='highlow'){stage.textContent='🔢';stage.classList.add('stage-shake');await new Promise(r=>setTimeout(r,900));stage.classList.remove('stage-shake');stage.textContent='🔢 '+data.number;}
-    else if(code==='blackjack'){stage.textContent='🃏';stage.classList.add('stage-shake');await new Promise(r=>setTimeout(r,1000));stage.classList.remove('stage-shake');stage.textContent=`🃏 ${data.player}  vs  ${data.dealer}`;}
-    else if(code==='race'){stage.textContent='🏎️ 🏎️ 🏎️ 🏎️';stage.classList.add('stage-shake');await new Promise(r=>setTimeout(r,1200));stage.classList.remove('stage-shake');stage.textContent='🏆 '+(data.winner||1);}
-    else {stage.textContent=data.display||currentGame?.emoji||'🎮';stage.classList.add('stage-pop');await new Promise(r=>setTimeout(r,700));}
-}
-
-
-async function revealMine(sid,cell,el){
-    try{el.disabled=true;const d=await api('/api/mines/reveal',{method:'POST',body:JSON.stringify({user_id:userId,session_id:sid,cell})});const r=d.result;if(r.safe){el.textContent='💎';el.classList.add('open');document.getElementById('gameResult').textContent='💎 '+r.multiplier.toFixed(2)+'x · '+r.next_payout+' FC';}else{el.textContent='💣';el.classList.add('mine');document.querySelectorAll('.mine-cell').forEach(x=>x.disabled=true);toast('💥 Мина!');document.getElementById('gameResult').textContent='💀 МИНА';await loadUser();}}catch(e){el.disabled=false;toast(e.message)}}
-async function cashoutMines(sid){try{const d=await api('/api/mines/cashout',{method:'POST',body:JSON.stringify({user_id:userId})});document.getElementById('gameResult').innerHTML=`🏆 CASHOUT <span class="green">+${d.result.profit} FC</span>`;document.querySelectorAll('.mine-cell').forEach(x=>x.disabled=true);toast('💰 Забрано '+d.result.payout+' FC');await loadUser();}catch(e){toast(e.message)}}
-
-async function playCurrentGame(){
-    if(!currentGame)return;
-    const bet=Number(document.getElementById('bet').value); if(!bet||bet<=0){toast('Введите ставку');return;}
-    const button=document.getElementById('playButton');button.disabled=true;button.textContent='⏳ ИГРАЕМ...';
-    const resultEl=document.getElementById('gameResult'); resultEl.className='game-result';resultEl.textContent='';
-    try{
-        if(currentGame.code==='mines'){
-            const st=await api('/api/mines/start',{method:'POST',body:JSON.stringify({user_id:userId,bet,mines_count:5})});
-            const sid=st.session.id; const stage=document.getElementById('stageContent');
-            stage.innerHTML='<div class=\"stage-grid\">'+Array.from({length:25},(_,i)=>`<button class=\"mine-cell\" onclick=\"revealMine(${sid},${i},this)\">?</button>`).join('')+'</div><button id=\"cashoutBtn\" class=\"play-btn\" style=\"grid-column:1/-1;margin-top:10px\" onclick=\"cashoutMines(${sid})\">💰 ЗАБРАТЬ</button>';
-            resultEl.innerHTML='💣 Открой клетки'; resultEl.className='game-result'; await loadUser(); return;
-        }
-        const data=await api('/api/play',{method:'POST',body:JSON.stringify({user_id:userId,game:currentGame.code,bet})});
-        await animateGame(currentGame.code,data.game_data||{});
-        const r=data.result||{}; const sign=Number(r.profit)>0?'+':'';
-        resultEl.innerHTML=r.win?`🔥 ПОБЕДА <span class="green">${sign}${Number(r.profit).toLocaleString('ru-RU')} FC</span>`:`💀 ПРОИГРЫШ <span class="red">${Number(r.profit).toLocaleString('ru-RU')} FC</span>`;
-        resultEl.className='game-result '+(r.win?'green':'red'); toast(r.win?'🔥 Победа!':'💀 Раунд завершён'); await loadUser();
-    }catch(e){toast(e.message)}finally{button.disabled=false;button.textContent='🔥 ИГРАТЬ'}
-}
-
-async function loadLeaderboard() {
-
-    try {
-
-        const data =
-            await api(
-                "/api/leaderboard?limit=50"
-            );
-
-        const container =
-            document.getElementById(
-                "leaderboard"
-            );
-
-        if (
-            !data.leaderboard.length
-        ) {
-
-            container.innerHTML =
-                `<div class="empty">
-                    Пока никого нет
-                </div>`;
-
-            return;
-        }
-
-        container.innerHTML =
-            data.leaderboard.map(
-                player => {
-
-                    const medal =
-                        player.position === 1
-                            ? "🥇"
-                            : player.position === 2
-                            ? "🥈"
-                            : player.position === 3
-                            ? "🥉"
-                            : player.position;
-
-                    return `
-
-                        <div class="list-item">
-
-                            <div class="row-left">
-
-                                <div class="rank">
-                                    ${medal}
-                                </div>
-
-                                <div>
-
-                                    <div
-                                        style="
-                                            font-weight:800
-                                        "
-                                    >
-                                        ${
-                                            player.first_name ||
-                                            player.username ||
-                                            "Игрок"
-                                        }
-                                    </div>
-
-                                    <div
-                                        class="muted"
-                                        style="
-                                            font-size:10px
-                                        "
-                                    >
-                                        LVL ${
-                                            player.level
-                                        }
-                                        ·
-                                        ${
-                                            player.wins
-                                        } побед
-                                    </div>
-
-                                </div>
-
-                            </div>
-
-                            <div class="coin">
-                                💰 ${
-                                    Number(
-                                        player.balance
-                                    )
-                                    .toLocaleString(
-                                        "ru-RU"
-                                    )
-                                }
-                            </div>
-
-                        </div>
-
-                    `;
-
-                }
-            ).join("");
-
-    } catch (e) {
-
-        toast(e.message);
-
-    }
-}
-
-
-async function loadReferrals() {
-
-    const data =
-        await api(
-            "/api/referrals?user_id=" +
-            userId
-        );
-
-    document.getElementById(
-        "refCount"
-    ).textContent =
-        data.count;
-
-    const botUsername =
-        tg &&
-        tg.initDataUnsafe &&
-        tg.initDataUnsafe.user
-            ? "YOUR_BOT"
-            : "YOUR_BOT";
-
-    document.getElementById(
-        "refLink"
-    ).textContent =
-        "https://t.me/" +
-        botUsername +
-        "?start=ref_" +
-        userId;
-}
-
-
-function copyReferral() {
-
-    const text =
-        document.getElementById(
-            "refLink"
-        ).textContent;
-
-    navigator.clipboard
-        .writeText(text)
-        .then(() => {
-            toast(
-                "Ссылка скопирована 🔥"
-            );
-        });
-}
-
-
-async function loadMissions() {
-
-    try {
-
-        const data =
-            await api(
-                "/api/missions"
-            );
-
-        const container =
-            document.getElementById(
-                "missions"
-            );
-
-        if (!data.missions.length) {
-
-            container.innerHTML =
-                `<div class="empty">
-                    Новые миссии скоро появятся 🔥
-                </div>`;
-
-            return;
-        }
-
-        container.innerHTML =
-            data.missions.map(
-                mission => {
-
-                    return `
-
-                        <div class="list-item">
-
-                            <div>
-
-                                <div
-                                    style="
-                                        font-weight:900
-                                    "
-                                >
-                                    🎯
-                                    ${mission.title}
-                                </div>
-
-                                <div
-                                    class="muted"
-                                    style="
-                                        margin-top:4px;
-                                        font-size:10px
-                                    "
-                                >
-                                    ${
-                                        mission.description ||
-                                        "Выполни миссию"
-                                    }
-                                </div>
-
-                            </div>
-
-                            <div
-                                style="
-                                    text-align:right
-                                "
-                            >
-
-                                <div class="coin">
-                                    +
-                                    ${mission.reward}
-                                    FC
-                                </div>
-
-                                <button
-                                    onclick="
-                                        claimMission(
-                                            ${mission.id}
-                                        )
-                                    "
-                                    style="
-                                        margin-top:6px;
-                                        padding:6px 9px;
-                                        border:0;
-                                        border-radius:8px;
-                                        background:#ff244c;
-                                        color:white;
-                                        font-size:9px;
-                                        font-weight:900
-                                    "
-                                >
-                                    ЗАБРАТЬ
-                                </button>
-
-                            </div>
-
-                        </div>
-
-                    `;
-
-                }
-            ).join("");
-
-    } catch (e) {
-
-        toast(e.message);
-
-    }
-}
-
-
-async function claimMission(id) {
-
-    try {
-
-        const data =
-            await api(
-                "/api/missions/claim",
-                {
-                    method: "POST",
-                    body: JSON.stringify({
-                        user_id: userId,
-                        mission_id: id
-                    })
-                }
-            );
-
-        toast(
-            "🎁 Получено +" +
-            data.reward +
-            " FC"
-        );
-
-        await loadUser();
-        await loadMissions();
-
-    } catch (e) {
-
-        toast(e.message);
-
-    }
-}
-
-
-function showPage(
-    page,
-    button
-) {
-
-    document
-        .querySelectorAll(".page")
-        .forEach(
-            x => x.classList.remove(
-                "active"
-            )
-        );
-
-    document.getElementById(
-        "page-" + page
-    ).classList.add("active");
-
-
-    document
-        .querySelectorAll(".nav button")
-        .forEach(
-            x => x.classList.remove(
-                "active"
-            )
-        );
-
-    button.classList.add("active");
-
-
-    if (page === "profile") {
-        loadUser();
-    }
-
-    if (page === "rating") {
-        loadLeaderboard();
-    }
-
-    if (page === "referrals") {
-        loadReferrals();
-    }
-
-    if (page === "missions") {
-        loadMissions();
-    }
-}
-
-
-async function loadPvp() {
-    try {
-        const data=await api("/api/pvp");
-        const box=document.getElementById("pvpList");
-        box.innerHTML=data.matches.length ? data.matches.map(m=>`<div class="list-item"><div><b>⚔️ ${m.game_code}</b><div class="muted">${m.creator_first_name||m.creator_username||"Игрок"} · ставка ${m.stake} FC</div></div><button onclick="joinPvp(${m.id})" style="border:0;border-radius:10px;padding:9px 12px;background:#ff244c;color:#fff;font-weight:900">ВОЙТИ</button></div>`).join("") : '<div class="empty">Открытых матчей пока нет</div>';
-    } catch(e) { console.error(e); }
-}
-
-async function createPvp() {
-    const stake=Number(document.getElementById("pvpStake").value);
-    const game=document.getElementById("pvpGame").value;
-    try { const d=await api("/api/pvp/create",{method:"POST",body:JSON.stringify({user_id:userId,game,stake})}); toast("⚔️ Матч #"+d.match.id+" создан"); await loadUser(); await loadPvp(); } catch(e) { toast(e.message); }
-}
-
-async function joinPvp(id) {
-    try { const d=await api("/api/pvp/join",{method:"POST",body:JSON.stringify({user_id:userId,match_id:id})}); toast("⚔️ Ты вошёл в матч"); const r=await api("/api/pvp/"+id+"/play",{method:"POST",body:JSON.stringify({user_id:userId})}); toast(r.winner_id===userId ? "🏆 Победа +"+r.prize+" FC" : "💀 Поражение"); await loadUser(); await loadPvp(); } catch(e) { toast(e.message); }
-}
-
-async function boot() {
-
-    try {
-
-        await registerUser();
-
-        await Promise.all([loadUser(), loadGames(), loadPvp()]);
-
-    } catch (e) {
-
-        console.error(e);
-
-        toast(
-            "Ошибка запуска: " +
-            e.message
-        );
-    }
-}
-
-
-boot();
-
-</script>
-
-</body>
-</html>
-"""
-
-
-# =========================================================
-# ERROR HANDLER
-# =========================================================
+    ok,result=await buy_item(req.user_id,req.code)
+    if not ok: raise HTTPException(400,str(result))
+    return {'ok':True,'item':row(result)}
+@app.get('/api/stats')
+async def stats(): return {'ok':True,'stats':await get_stats()}
+@app.get('/api/player/stats')
+async def player_stats(user_id:int=Query(...)):
+    await require_user(user_id); return {'ok':True,'stats':row(await get_player_stats(user_id))}
+
+# Mines: persistent round state in PostgreSQL
+@app.post('/api/mines/start')
+async def mines_begin(req:MineStartRequest):
+    await require_user(req.user_id)
+    try: s=await mines_start(req.user_id,req.bet,5,req.mines)
+    except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True,'session':row(s)}
+@app.get('/api/mines/active')
+async def mines_get(user_id:int=Query(...)):
+    await require_user(user_id); return {'ok':True,'session':row(await mines_active(user_id))}
+@app.post('/api/mines/reveal')
+async def mines_open(req:MineRevealRequest):
+    await require_user(req.user_id)
+    try: return {'ok':True,'result':serial(await mines_reveal(req.user_id,req.session_id,req.cell))}
+    except ValueError as e: raise HTTPException(400,str(e))
+@app.post('/api/mines/cashout')
+async def mines_out(req:MineCashoutRequest):
+    await require_user(req.user_id)
+    try: return {'ok':True,'result':serial(await mines_cashout(req.user_id,req.session_id))}
+    except ValueError as e: raise HTTPException(400,str(e))
+
+# PvP lobby + server-side resolution. Both players lock stake; winner receives prize.
+@app.get('/api/pvp')
+async def pvp_list():
+    from app.db import check_pool
+    db=check_pool(); rows=await db.fetch("SELECT id,creator_id,opponent_id,game_code,stake,prize,status,creator_score,opponent_score,started_at,finished_at FROM pvp_matches WHERE status IN ('open','active') ORDER BY id DESC LIMIT 50")
+    return {'ok':True,'matches':[row(x) for x in rows]}
+@app.post('/api/pvp/create')
+async def pvp_create(req:PVPCreateRequest):
+    await require_user(req.user_id)
+    try: m=await create_pvp(req.user_id,req.stake,req.game)
+    except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True,'match':row(m)}
+@app.post('/api/pvp/join')
+async def pvp_join(req:PVPJoinRequest):
+    await require_user(req.user_id)
+    try: m=await join_pvp(req.match_id,req.user_id)
+    except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True,'match':row(m)}
+@app.post('/api/pvp/finish')
+async def pvp_finish(req:PVPFinishRequest):
+    await require_user(req.user_id)
+    from app.db import check_pool
+    db=check_pool(); m=await db.fetchrow("SELECT * FROM pvp_matches WHERE id=$1 AND status='active'",req.match_id)
+    if not m: raise HTTPException(404,'Матч не найден или уже завершён')
+    if req.user_id not in (m['creator_id'],m['opponent_id']): raise HTTPException(403,'Вы не участник матча')
+    a=random.randint(1,6); b=random.randint(1,6)
+    if a==b: b=random.choice([x for x in range(1,7) if x!=a])
+    winner=m['creator_id'] if a>b else m['opponent_id']; loser=m['opponent_id'] if winner==m['creator_id'] else m['creator_id']
+    prize=await finish_pvp(req.match_id,winner,loser,a,b)
+    return {'ok':True,'winner_id':winner,'creator_score':a,'opponent_score':b,'prize':prize}
+
+# Admin
+@app.get('/api/admin/overview')
+async def admin_overview(admin_id:int=Query(...)):
+    await require_admin(admin_id); return {'ok':True,'stats':await get_stats(),'users':[row(x) for x in await admin_users(100)]}
+@app.post('/api/admin/give')
+async def admin_give_api(req:AdminMoneyRequest):
+    await require_admin(req.admin_id); return {'ok':True,'balance':await admin_give(req.admin_id,req.user_id,req.amount)}
+@app.post('/api/admin/take')
+async def admin_take_api(req:AdminMoneyRequest):
+    await require_admin(req.admin_id); return {'ok':True,'balance':await admin_take(req.admin_id,req.user_id,req.amount)}
+@app.post('/api/admin/ban')
+async def admin_ban_api(req:AdminBanRequest):
+    await require_admin(req.admin_id); await set_ban(req.admin_id,req.user_id,req.banned); return {'ok':True}
+@app.post('/api/admin/game')
+async def admin_game_api(req:AdminGameRequest):
+    await require_admin(req.admin_id); g=await admin_set_game(req.code,req.enabled); return {'ok':True,'game':row(g)}
+@app.post('/api/admin/setting')
+async def admin_setting_api(req:AdminSettingRequest):
+    await require_admin(req.admin_id); s=await admin_set_setting(req.key,req.value); return {'ok':True,'setting':row(s)}
 
 @app.exception_handler(Exception)
-async def global_exception_handler(
-    request,
-    exc,
-):
-    print(
-        "🔥 INTERNAL ERROR:",
-        repr(exc)
-    )
+async def errors(request,exc):
+    print('🔥 INTERNAL ERROR:',repr(exc))
+    return JSONResponse(500,{'ok':False,'error':'internal_server_error','message':str(exc)})
 
-    return JSONResponse(
-        status_code=500,
-        content={
-            "ok": False,
-            "error": "internal_server_error",
-            "message": str(exc),
-        },
-    )
+HTML=r'''<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>Fenix Coin Ultra</title><script src="https://telegram.org/js/telegram-web-app.js"></script><style>
+*{box-sizing:border-box}body{margin:0;background:#050509;color:#fff;font-family:Inter,system-ui,sans-serif}button,input{font:inherit}.app{max-width:680px;margin:auto;min-height:100vh;padding-bottom:105px;background:radial-gradient(circle at 50% -10%,#65102755,transparent 38%),#050509}.top{position:sticky;top:0;z-index:20;padding:15px 16px;display:flex;justify-content:space-between;align-items:center;background:#07070be8;backdrop-filter:blur(18px);border-bottom:1px solid #ffffff0d}.brand{display:flex;gap:10px;align-items:center}.flame{width:43px;height:43px;border-radius:15px;display:grid;place-items:center;background:linear-gradient(135deg,#ff194d,#7f0d2c);box-shadow:0 0 28px #ff164733;font-size:22px}.brand b{font-size:15px}.brand small{display:block;color:#8e8e9d;font-size:9px;margin-top:3px}.bal{color:#ffd75c;background:#ffd75c0c;border:1px solid #ffd75c22;padding:9px 12px;border-radius:14px;font-weight:900;font-size:12px}.content{padding:14px 15px}.hero{padding:24px;border:1px solid #ff315522;border-radius:25px;background:linear-gradient(135deg,#ff174d22,#69122b12);position:relative;overflow:hidden}.hero:after{content:'🔥';position:absolute;right:-5px;bottom:-35px;font-size:120px;opacity:.08}.hero small{color:#ff5977;font-weight:900;letter-spacing:1.5px}.hero h1{font-size:31px;line-height:1;margin:8px 0}.hero p{color:#aaaab8;font-size:12px;line-height:1.5}.tabs{display:flex;gap:7px;overflow:auto;margin:14px 0}.tabs button{white-space:nowrap;border:1px solid #ffffff10;background:#ffffff06;color:#aaa;padding:10px 13px;border-radius:13px;font-size:11px;font-weight:800}.tabs button.on{background:#ff174d18;color:#ff5573;border-color:#ff174d33}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.game{min-height:150px;text-align:left;padding:16px;border:1px solid #ffffff0d;border-radius:20px;background:linear-gradient(145deg,#ffffff09,#ffffff02);color:#fff;cursor:pointer;transition:.18s}.game:active{transform:scale(.97)}.game:hover{border-color:#ff2b5033}.ico{font-size:39px;filter:drop-shadow(0 5px 12px #000)}.game b{display:block;margin-top:12px;font-size:15px}.game small{display:block;color:#81818f;margin-top:5px;font-size:10px}.page{display:none}.page.on{display:block}.card{padding:17px;border:1px solid #ffffff0d;border-radius:20px;background:#ffffff05;margin-bottom:10px}.row{display:flex;justify-content:space-between;align-items:center;gap:10px}.muted{color:#898996}.green{color:#32e69b}.red{color:#ff5273}.gold{color:#ffd75c}.btn{width:100%;border:0;border-radius:15px;padding:14px;background:linear-gradient(135deg,#ff1d4e,#b90f36);color:#fff;font-weight:900;cursor:pointer}.btn.secondary{background:#ffffff0a;border:1px solid #ffffff10}.bet{width:100%;padding:14px;border-radius:14px;border:1px solid #ffffff10;background:#ffffff06;color:#fff;outline:none}.quick{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin:8px 0}.quick button{border:1px solid #ffffff10;background:#ffffff05;color:#bbb;padding:9px;border-radius:10px}.nav{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);z-index:50;width:min(650px,calc(100% - 20px));display:grid;grid-template-columns:repeat(5,1fr);gap:4px;padding:7px;background:#111118ee;border:1px solid #ffffff10;border-radius:23px;backdrop-filter:blur(20px)}.nav button{border:0;background:none;color:#737381;border-radius:17px;padding:8px 3px}.nav button.on{background:#ff174d14;color:#ff5473}.nav i{font-style:normal;display:block;font-size:18px}.nav small{font-size:8px;font-weight:800}.modal{position:fixed;inset:0;z-index:100;background:#000b;display:none;align-items:flex-end}.modal.on{display:flex}.sheet{width:100%;max-width:680px;margin:auto;background:linear-gradient(#171720,#08080d);border:1px solid #ffffff10;border-radius:27px 27px 0 0;padding:20px;max-height:92vh;overflow:auto}.close{border:0;background:#ffffff0b;color:#fff;border-radius:11px;width:36px;height:36px}.stage{text-align:center;padding:20px 0}.stageIcon{font-size:70px;min-height:85px;display:grid;place-items:center}.result{font-size:22px;font-weight:1000;min-height:30px}.anim{animation:pulse .7s infinite alternate}@keyframes pulse{to{transform:scale(1.1);filter:drop-shadow(0 0 20px #ff2855)}}.shake{animation:shake .12s infinite}@keyframes shake{25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}.slots{display:flex;justify-content:center;gap:8px}.reel{width:72px;height:82px;display:grid;place-items:center;border-radius:15px;background:#0a0a10;border:1px solid #ffffff12;font-size:40px;overflow:hidden}.minegrid{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin:15px 0}.cell{aspect-ratio:1;border:1px solid #ffffff0e;border-radius:12px;background:#ffffff08;color:#fff;font-size:23px;cursor:pointer}.cell.safe{background:#32e69b18;border-color:#32e69b44}.cell.mine{background:#ff174d22;border-color:#ff174d55}.rocket{font-size:65px;transition:transform .15s}.crashline{font-size:30px;font-weight:1000;color:#ffd75c}.list{display:grid;gap:8px}.item{padding:13px;border-radius:15px;background:#ffffff05;border:1px solid #ffffff09}.adminStat{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.adminStat .card{text-align:center}.toast{position:fixed;top:18px;left:50%;transform:translate(-50%,-15px);opacity:0;z-index:300;background:#20202a;border:1px solid #ffffff12;border-radius:13px;padding:11px 16px;font-size:11px;font-weight:900;transition:.2s}.toast.show{opacity:1;transform:translate(-50%,0)}
+</style></head><body><div class="app"><header class="top"><div class="brand"><div class="flame">🔥</div><div><b>FENIX COIN</b><small>ULTRA GAME PLATFORM</small></div></div><div class="bal">💰 <span id="balance">0</span></div></header><main class="content"><section class="hero"><small>FENIX COIN ULTRA V3</small><h1>Играй по-настоящему.</h1><p>Анимации, серверная механика, Mines, Crash, PvP, рейтинг, магазин и админ-панель.</p></section><div class="tabs" id="tabs"><button class="on" onclick="tab('games',this)">🎮 Игры</button><button onclick="tab('pvp',this)">⚔️ PvP</button><button onclick="tab('shop',this)">🛒 Магазин</button><button onclick="tab('missions',this)">🎯 Миссии</button><button onclick="tab('admin',this)">⚙️ Admin</button></div><section id="games" class="page on"><div class="grid" id="gamesGrid"></div></section><section id="pvp" class="page"><div class="card"><b>⚔️ PvP-арена</b><p class="muted">Создай матч, соперник внесёт такую же ставку. Сервер определит результат.</p><input id="pvpStake" class="bet" type="number" value="250"><br><br><button class="btn" onclick="createPvp()">⚔️ Создать матч</button></div><div class="list" id="pvpList"></div></section><section id="shop" class="page"><div class="list" id="shopList"></div></section><section id="missions" class="page"><div class="list" id="missionList"></div></section><section id="admin" class="page"><div id="adminBox" class="card">Проверка доступа...</div></section></main><nav class="nav"><button class="on" onclick="tab('games',this)"><i>🎮</i><small>Игры</small></button><button onclick="tab('pvp',this)"><i>⚔️</i><small>PvP</small></button><button onclick="tab('shop',this)"><i>🛒</i><small>Магазин</small></button><button onclick="tab('missions',this)"><i>🎯</i><small>Миссии</small></button><button onclick="tab('admin',this)"><i>⚙️</i><small>Admin</small></button></nav></div><div id="modal" class="modal" onclick="if(event.target===this)closeModal()"><div class="sheet"><div class="row"><div><b id="mTitle">Игра</b><small id="mDesc" class="muted" style="display:block;margin-top:4px"></small></div><button class="close" onclick="closeModal()">✕</button></div><div class="stage"><div id="stageIcon" class="stageIcon">🎮</div><div id="stage" class="result">Готов?</div><div id="extra"></div></div><input id="bet" class="bet" type="number" value="250"><div class="quick"><button onclick="setBet(100)">100</button><button onclick="setBet(250)">250</button><button onclick="setBet(500)">500</button><button onclick="setBet(1000)">1000</button></div><div id="gameControls"><button class="btn" onclick="playCurrent()">🔥 ИГРАТЬ</button></div></div></div><div id="toast" class="toast"></div><script>
+const tg=window.Telegram?.WebApp;tg?.ready();tg?.expand();const U=tg?.initDataUnsafe?.user;let uid=U?.id||0, games=[],current=null,minesSession=null;
+const demo=()=>{if(!uid){show('Открой Mini App из Telegram');throw Error('Telegram user отсутствует')}};
+async function api(url,opt={}){opt.headers={...(opt.headers||{}),'Content-Type':'application/json'};const r=await fetch(url,opt);const d=await r.json();if(!r.ok)throw Error(d.detail||d.message||'Ошибка API');return d}
+function show(x){const e=document.getElementById('toast');e.textContent=x;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2200)}
+function tab(id,b){document.querySelectorAll('.page').forEach(x=>x.classList.remove('on'));document.getElementById(id).classList.add('on');document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('on'));if(b?.parentElement?.classList.contains('nav'))b.classList.add('on');else{const n=[...document.querySelectorAll('.nav button')].find(x=>x.textContent.includes(id==='games'?'Игры':id==='pvp'?'PvP':id==='shop'?'Магазин':id==='missions'?'Миссии':'Admin'));n?.classList.add('on')}if(id==='pvp')loadPvp();if(id==='shop')loadShop();if(id==='missions')loadMissions();if(id==='admin')loadAdmin()}
+async function boot(){try{demo();const init=tg?.initData||'';await api('/api/register',{method:'POST',body:JSON.stringify({user_id:uid,username:U.username||'',first_name:U.first_name||'',last_name:U.last_name||'',init_data:init})});await loadUser();await loadGames();}catch(e){show(e.message);console.error(e)}}
+async function loadUser(){const d=await api('/api/user?user_id='+uid);document.getElementById('balance').textContent=Number(d.user.balance).toLocaleString('ru-RU')}
+async function loadGames(){const d=await api('/api/games');games=d.games;document.getElementById('gamesGrid').innerHTML=games.map(g=>`<button class="game" onclick="openGame('${g.code}')"><div class="ico">${g.emoji}</div><b>${g.title}</b><small>${g.description||''}</small><small>${g.min_bet}–${g.max_bet} FC</small></button>`).join('')}
+function openGame(code){current=games.find(g=>g.code===code);if(!current)return;document.getElementById('modal').classList.add('on');document.getElementById('mTitle').textContent=current.title;document.getElementById('mDesc').textContent=current.description||'';document.getElementById('stageIcon').textContent=current.emoji;document.getElementById('stage').textContent='Готов?';document.getElementById('extra').innerHTML='';document.getElementById('bet').value=Math.max(current.min_bet,250);if(code==='mines')setupMines();else if(code==='crash')setupCrash()}
+function closeModal(){document.getElementById('modal').classList.remove('on');minesSession=null}
+function setBet(n){document.getElementById('bet').value=n}
+async function playCurrent(){if(!current)return;const bet=+document.getElementById('bet').value;const icon=document.getElementById('stageIcon');const st=document.getElementById('stage');if(current.code==='mines'){return startMines()}if(current.code==='crash'){return playCrash()}icon.classList.add('anim');st.textContent='🎬 Анимация...';await new Promise(r=>setTimeout(r,current.code==='slots'?1000:650));try{const d=await api('/api/play',{method:'POST',body:JSON.stringify({user_id:uid,game:current.code,bet,options:{}})});renderResult(d.game_data,d.result);await loadUser()}catch(e){show(e.message)}finally{icon.classList.remove('anim')}}
+function renderResult(g,r){const st=document.getElementById('stage'),icon=document.getElementById('stageIcon');st.className='result '+(r.win?'green':'red');st.innerHTML=(g.display||'')+'<br>'+(r.win?'🔥 ПОБЕДА +':'💀 ПРОИГРЫШ ')+Number(r.profit).toLocaleString('ru-RU')+' FC';if(g.reels){document.getElementById('extra').innerHTML='<div class="slots">'+g.reels.map(x=>`<div class="reel">${x}</div>`).join('')+'</div>'}icon.textContent=g.emoji||current.emoji;show(r.win?'🔥 Победа':'💀 Проигрыш')}
+function setupCrash(){document.getElementById('stageIcon').innerHTML='<div class="rocket">🚀</div>';document.getElementById('stage').innerHTML='<div class="crashline">1.00x</div>';document.getElementById('extra').innerHTML='<small class="muted">Нажми ИГРАТЬ — ракета будет расти, пока сервер не определит краш.</small>'}
+async function playCrash(){const bet=+document.getElementById('bet').value,icon=document.getElementById('stageIcon'),st=document.getElementById('stage');icon.classList.add('anim');try{const d=await api('/api/play',{method:'POST',body:JSON.stringify({user_id:uid,game:'crash',bet,options:{cashout_target:2.00}})});const end=+d.game_data.crash_at;let x=1;const t=setInterval(()=>{x=Math.min(end,x+(end-1)/30);st.innerHTML='<div class="crashline">'+x.toFixed(2)+'x</div>';icon.querySelector('.rocket').style.transform=`translate(${Math.min(150,x*2)}px,${-Math.min(70,(x-1)*2)}px)`;if(x>=end){clearInterval(t);renderResult(d.game_data,d.result);icon.classList.remove('anim')}},50);await loadUser()}catch(e){icon.classList.remove('anim');show(e.message)}}
+function setupMines(){document.getElementById('stage').textContent='💣 Выбери клетки';document.getElementById('gameControls').innerHTML='<button class="btn" onclick="startMines()">💣 НАЧАТЬ MINES</button>'}
+async function startMines(){const bet=+document.getElementById('bet').value;try{const d=await api('/api/mines/start',{method:'POST',body:JSON.stringify({user_id:uid,bet,mines:5})});minesSession=d.session;renderMineGrid();await loadUser()}catch(e){show(e.message)}}
+function renderMineGrid(){const opened=JSON.parse(minesSession.opened||'[]');document.getElementById('extra').innerHTML='<div class="minegrid">'+Array.from({length:25},(_,i)=>`<button id="c${i}" class="cell ${opened.includes(i)?'safe':''}" onclick="reveal(${i})">${opened.includes(i)?'💎':'?'}</button>`).join('')+'</div><div class="gold">Множитель: <b id="mult">'+(minesSession.multiplier||1)+'x</b></div>';document.getElementById('gameControls').innerHTML='<button class="btn" onclick="cashout()">💰 ЗАБРАТЬ</button>';document.getElementById('stage').textContent='Открывай клетки'}
+async function reveal(cell){if(!minesSession)return;try{const d=await api('/api/mines/reveal',{method:'POST',body:JSON.stringify({user_id:uid,session_id:minesSession.id,cell})});const r=d.result;if(r.status==='lost'){r.mine_positions.forEach(i=>document.getElementById('c'+i).textContent='💣');r.mine_positions.forEach(i=>document.getElementById('c'+i).classList.add('mine'));document.getElementById('stage').innerHTML='💥 МИНА';document.getElementById('stage').className='result red';document.getElementById('gameControls').innerHTML='<button class="btn secondary" onclick="closeModal()">Закрыть</button>';minesSession=null}else{minesSession.opened=JSON.stringify(r.opened);minesSession.multiplier=r.multiplier;renderMineGrid();document.getElementById('mult').textContent=r.multiplier+'x'}}catch(e){show(e.message)}}
+async function cashout(){if(!minesSession)return;try{const d=await api('/api/mines/cashout',{method:'POST',body:JSON.stringify({user_id:uid,session_id:minesSession.id})});document.getElementById('stage').innerHTML='💰 +'+Number(d.result.profit).toLocaleString('ru-RU')+' FC';document.getElementById('stage').className='result green';document.getElementById('gameControls').innerHTML='<button class="btn secondary" onclick="closeModal()">Закрыть</button>';await loadUser();minesSession=null}catch(e){show(e.message)}}
+async function createPvp(){try{const d=await api('/api/pvp/create',{method:'POST',body:JSON.stringify({user_id:uid,stake:+document.getElementById('pvpStake').value,game:'dice'})});show('Матч #'+d.match.id+' создан');await loadUser();loadPvp()}catch(e){show(e.message)}}
+async function loadPvp(){try{const d=await api('/api/pvp');document.getElementById('pvpList').innerHTML=d.matches.length?d.matches.map(m=>`<div class="item"><div class="row"><b>⚔️ #${m.id} · ${m.game_code}</b><span class="gold">${m.stake} FC</span></div><small class="muted">${m.status==='open'?'Ждёт соперника':'Матч идёт'}</small><br><br>${m.status==='open'&&m.creator_id!==uid?`<button class="btn" onclick="joinPvp(${m.id})">Войти</button>`:m.status==='active'&&[m.creator_id,m.opponent_id].includes(uid)?`<button class="btn" onclick="finishPvp(${m.id})">🎲 СРАЗИТЬСЯ</button>`:''}</div>`).join(''):'<div class="card muted">Пока нет открытых матчей.</div>'}catch(e){show(e.message)}}
+async function joinPvp(id){try{await api('/api/pvp/join',{method:'POST',body:JSON.stringify({user_id:uid,match_id:id})});show('Ты вошёл в матч');await loadUser();loadPvp()}catch(e){show(e.message)}}
+async function finishPvp(id){try{const d=await api('/api/pvp/finish',{method:'POST',body:JSON.stringify({user_id:uid,match_id:id})});show(d.winner_id===uid?'🔥 ТЫ ПОБЕДИЛ!':'💀 Ты проиграл');await loadUser();loadPvp()}catch(e){show(e.message)}}
+async function loadShop(){try{const d=await api('/api/shop');document.getElementById('shopList').innerHTML=d.items.length?d.items.map(x=>`<div class="item row"><div><b>${x.title}</b><small class="muted" style="display:block">${x.description||''}</small></div><button class="btn" style="width:auto" onclick="buy('${x.code}')">${x.price} FC</button></div>`).join(''):'<div class="card muted">Магазин пуст.</div>'}catch(e){show(e.message)}}
+async function buy(code){try{await api('/api/shop/buy',{method:'POST',body:JSON.stringify({user_id:uid,code})});show('Покупка успешна');await loadUser();loadShop()}catch(e){show(e.message)}}
+async function loadMissions(){try{const d=await api('/api/missions');document.getElementById('missionList').innerHTML=d.missions.map(x=>`<div class="item row"><div><b>🎯 ${x.title}</b><small class="muted" style="display:block">${x.description||''}</small></div><button class="btn" style="width:auto" onclick="claim(${x.id})">+${x.reward}</button></div>`).join('')||'<div class="card muted">Миссий пока нет.</div>'}catch(e){show(e.message)}}
+async function claim(id){try{const d=await api('/api/missions/claim',{method:'POST',body:JSON.stringify({user_id:uid,mission_id:id})});show('🎁 +'+d.reward+' FC');await loadUser();loadMissions()}catch(e){show(e.message)}}
+async function loadAdmin(){try{const d=await api('/api/admin/overview?admin_id='+uid);document.getElementById('adminBox').innerHTML='<b>⚙️ ADMIN PANEL</b><div class="adminStat" style="margin-top:12px"><div class="card"><b>'+d.stats.users+'</b><small class="muted">Игроков</small></div><div class="card"><b>'+d.stats.games+'</b><small class="muted">Игр</small></div><div class="card"><b>'+d.stats.pvp_matches+'</b><small class="muted">PvP</small></div></div><hr style="border-color:#ffffff0b"><b>Выдать FC</b><input id="aid" class="bet" placeholder="ID игрока"><input id="aamt" class="bet" style="margin-top:7px" placeholder="Количество"><button class="btn" style="margin-top:7px" onclick="give()">💰 Выдать</button><hr style="border-color:#ffffff0b"><div class="list">'+d.users.slice(0,30).map(u=>`<div class="item"><div class="row"><b>${u.first_name||u.username||'Игрок'}</b><span class="gold">${Number(u.balance).toLocaleString()} FC</span></div><small class="muted">ID ${u.id} · LVL ${u.level} · ${u.games} игр ${u.banned?' · 🚫 BANNED':''}</small></div>`).join('')+'</div>'}catch(e){document.getElementById('adminBox').innerHTML='<b>🔒 Нет доступа</b><p class="muted">Добавь свой Telegram ID в ADMIN_IDS на Render.</p>';}}
+async function give(){try{await api('/api/admin/give',{method:'POST',body:JSON.stringify({admin_id:uid,user_id:+document.getElementById('aid').value,amount:+document.getElementById('aamt').value})});show('FC выданы');loadAdmin()}catch(e){show(e.message)}}boot();</script></body></html>'''

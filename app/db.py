@@ -686,6 +686,14 @@ async def init_db():
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT")
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS xp BIGINT NOT NULL DEFAULT 0")
         await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS level INTEGER NOT NULL DEFAULT 1")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS admin BOOLEAN NOT NULL DEFAULT FALSE")
+        await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT FALSE")
+        await conn.execute("ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS creator_score INTEGER")
+        await conn.execute("ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS opponent_score INTEGER")
+        await conn.execute("ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS winner_id BIGINT")
+        await conn.execute("ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS loser_id BIGINT")
+        await conn.execute("ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ")
+        await conn.execute("ALTER TABLE pvp_matches ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ")
 
         # ----------------------------------------------------
         # Default games
@@ -2808,3 +2816,24 @@ async def get_player_stats(user_id: int):
     data = dict(row)
     data["win_rate"] = round((wins / games) * 100, 2) if games else 0.0
     return data
+
+# ============================================================
+# ADMIN API HELPERS (v3)
+# ============================================================
+async def is_admin(user_id: int) -> bool:
+    if int(user_id) in settings.admin_ids:
+        return True
+    db = check_pool()
+    return bool(await db.fetchval("SELECT COALESCE(admin,FALSE) FROM users WHERE id=$1", user_id))
+
+async def admin_users(limit: int = 100, offset: int = 0):
+    db = check_pool()
+    return await db.fetch("SELECT id,username,first_name,balance,level,games,wins,losses,referrals,banned,admin,created_at,last_activity_at FROM users ORDER BY balance DESC LIMIT $1 OFFSET $2", limit, offset)
+
+async def admin_set_game(code: str, enabled: bool):
+    db = check_pool()
+    return await db.fetchrow("UPDATE games SET enabled=$2 WHERE code=$1 RETURNING *", code, enabled)
+
+async def admin_set_setting(key: str, value: str):
+    db = check_pool()
+    return await db.fetchrow("INSERT INTO system_settings(key,value,updated_at) VALUES($1,$2,NOW()) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value,updated_at=NOW() RETURNING *", key, value)
