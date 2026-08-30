@@ -1,9 +1,38 @@
-DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE
-BOT_TOKEN=123456:YOUR_TELEGRAM_BOT_TOKEN
-WEBAPP_URL=https://YOUR-WEB-SERVICE.onrender.com
-BOT_USERNAME=YourBotUsername
-ADMIN_IDS=123456789
-START_BALANCE=1000
-REF_REWARD=600
-MIN_BET=10
-MAX_BET=100000
+services:
+  - type: web
+    name: fenix-coin-ultra-web
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10
+      - key: DATABASE_URL
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: WEBAPP_URL
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+
+  - type: worker
+    name: fenix-coin-ultra-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10
+      - key: DATABASE_URL
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: WEBAPP_URL
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
